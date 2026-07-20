@@ -52,17 +52,28 @@ class Poisk:
         mat = json.load(open(os.path.join(data_dir, "materialy.json"), encoding="utf-8"))
         self.material_podgr = mat.get("материал_подгруппа", {})
         self.slovo_v_imeni = mat.get("слово_в_имени", {})
+        # материал-в-имени (этап 7): стем запроса -> материал; регэксп материала над именем.
+        # Собираем обратный индекс: стем -> ключ материала и компилируем регэкспы имён.
+        self.material_stems = {}
+        self.material_re = {}
+        for mkey, spec in mat.get("материал_в_имени", {}).items():
+            self.material_re[mkey] = re.compile(spec["имя"])
+            for st in spec["стемы"]:
+                self.material_stems[st] = mkey
 
         # индексная строка: оригинальный товар + вычисленные поля поиска
         self.rows = []
         for t in tovary:
             imya = t.get("imya", "")
+            imya_low = imya.lower()
             self.rows.append({
                 "t": t,
                 "семейство": t.get("semeystvo") or family_of(imya),
                 "атр": razobrat(imya),
                 "стемы": stems(imya),
                 "стемы_подгр": stems(t.get("podgruppa", "")),
+                # назначение по материалу (этап 7): {дерево/бетон/...} из имени товара
+                "материалы": {mk for mk, rx in self.material_re.items() if rx.search(imya_low)},
             })
         self.po_sem = collections.defaultdict(list)
         for row in self.rows:
@@ -183,6 +194,8 @@ class Poisk:
         qa = self.atributy_zaprosa(q)
         chisla = qa.pop("_числа", set())
         mat_subs, name_tokens = self.rulevye(q)
+        # материал, названный в запросе (этап 7): «по дереву/бетону/металлу…»
+        zapros_materialy = {self.material_stems[s] for s in qs if s in self.material_stems}
         self._last_top = 0.0  # диагностика: балл лучшего кандидата (для калибровки порога)
 
         # прямой канал: штрихкод (EAN, 8-13 цифр) — самый специфичный
@@ -264,6 +277,13 @@ class Poisk:
             for w in utochn:
                 if soft_has(row["стемы"], w):
                     s += 2.5
+            # назначение по материалу (этап 7): «сверло по дереву» → «Сверло по дер.»
+            if zapros_materialy:
+                rm = row["материалы"]
+                if rm & zapros_materialy:
+                    s += 4.0           # верный материал в имени
+                elif rm:
+                    s -= 2.0           # конфликт: в имени другой материал
             # рулевой словарь (этап 6): материал -> нужная подгруппа Форы
             if mat_subs and row["t"].get("podgruppa", "") in mat_subs:
                 s += 4.0
