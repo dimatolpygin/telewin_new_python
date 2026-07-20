@@ -1,0 +1,12 @@
+# venv
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# секреты и логи
+.env
+*.log
+
+# крупные данные (генерируются export_price.py)
+data/products.json
