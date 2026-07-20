@@ -10,3 +10,4 @@ __pycache__/
 
 # крупные данные (генерируются export_price.py)
 data/products.json
+*.log

@@ -1,0 +1,75 @@
+# -*- coding: utf-8 -*-
+"""Гибридный поиск (этап 10): лексика (словарь+атрибуты+фаззи) ⊕ вектор, слитые
+через RRF (Reciprocal Rank Fusion).
+
+Принципы:
+  · жёсткие/прямые каналы (штрихкод, артикул, производитель) — приоритет; вектор в них
+    НЕ вмешивается (их результат возвращается как есть);
+  · когда лексика нашла кандидатов — вектор до-ранжирует и добавляет recall, но не
+    затирает точные совпадения (лексический ранг участвует в RRF наравне);
+  · когда лексика пуста (слова нет в словаре: «болгарка», «наждачка») — работает только
+    вектор, но с порогом похожести: иначе на мусорный запрос kNN всегда что-то вернёт,
+    а абстейн (этап 6) держится на этом. Порог обходит лишь осмысленные запросы.
+
+RRF: score(d) = Σ_канал  w_канал / (K + rank_канал(d)).  K сглаживает вклад хвоста.
+"""
+from collections import defaultdict
+
+from .search import Poisk
+from .vector import VectorKanal
+
+# Параметры слияния (тюнятся замером «лексика vs гибрид»).
+K_RRF = 60            # классическая константа RRF
+W_LEX = 1.0           # вес лексического ранга (точные размеры/атрибуты — здесь)
+W_VEC = 0.7           # вес векторного ранга (recall по синонимам/композиции)
+ГЛУБИНА = 200         # сколько кандидатов берём из каждого канала для слияния
+ПОРОГ_ВЕКТОРА = 0.55  # мин. косинус-похожесть, чтобы вернуть чисто-векторный ответ
+
+_ЖЁСТКИЕ = {"штрихкод", "артикул", "производитель"}
+
+
+class Gibrid:
+    """Обёртка над лексическим `Poisk` + векторным каналом. Хранит индекс id→товар
+    для связывания каналов (товары загружены из БД, у каждого есть `id`)."""
+
+    def __init__(self, poisk: Poisk, vk: VectorKanal):
+        self.poisk = poisk
+        self.vk = vk
+        self.по_id = {}
+        for row in poisk.rows:
+            i = row["t"].get("id")
+            if i is not None:
+                self.по_id[i] = row["t"]
+
+    async def iskat(self, q: str, top: int = 5, use_podgr: bool = True,
+                    use_slovar: bool = True, use_proizv: bool = True):
+        """Возвращает (список_товаров, канал) — как `Poisk.iskat`, но с векторным слиянием."""
+        lex, kanal = self.poisk.iskat(
+            q, top=ГЛУБИНА, use_podgr=use_podgr, use_slovar=use_slovar, use_proizv=use_proizv
+        )
+        # прямые/жёсткие каналы — вектор не трогаем
+        if kanal in _ЖЁСТКИЕ:
+            return lex[:top], kanal
+
+        vec = await self.vk.knn(q, limit=ГЛУБИНА)  # [(id, sim)]
+
+        # чисто-векторный ответ (лексика пуста): порог отсекает мусор
+        if not lex:
+            if not vec or vec[0][1] < ПОРОГ_ВЕКТОРА:
+                return [], "не найдено"
+            товары = [self.по_id[i] for i, _ in vec if i in self.по_id][:top]
+            return товары, "вектор"
+
+        # RRF-слияние лексики и вектора
+        rrf: dict = defaultdict(float)
+        for rank, t in enumerate(lex):
+            i = t.get("id")
+            if i is not None:
+                rrf[i] += W_LEX / (K_RRF + rank + 1)
+        for rank, (i, _sim) in enumerate(vec):
+            rrf[i] += W_VEC / (K_RRF + rank + 1)
+
+        порядок = sorted(rrf, key=lambda i: -rrf[i])
+        товары = [self.по_id[i] for i in порядок if i in self.по_id][:top]
+        # помечаем, что вектор участвовал (для логов/диагностики)
+        return товары, (kanal + "+вектор" if kanal and kanal != "не найдено" else "вектор")

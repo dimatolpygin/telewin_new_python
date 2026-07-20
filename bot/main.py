@@ -29,12 +29,19 @@ async def main() -> None:
     cfg = load_config()
 
     # Товары из Postgres (как боевой TS-бот). Поиск держит всё в памяти процесса.
+    # Пул НЕ закрываем — векторный канал (этап 10) ходит в pgvector на каждый запрос.
     from .db import create_pool, zagruzit_vse_tovary
+    from .search.vector import VectorKanal
+    from .search.gibrid import Gibrid
     pool = await create_pool(cfg)
     tovary = await zagruzit_vse_tovary(pool, cfg.pg.schema)
-    await pool.close()
     poisk = Poisk(tovary)
     logger.info(f"Поиск готов: {poisk.размер_базы} товаров в базе")
+
+    # Гибрид включаем, только если эмбеддинги посчитаны (иначе — чистая лексика).
+    vk = VectorKanal(pool, cfg.pg.schema)
+    gibrid = Gibrid(poisk, vk) if await vk.доступен() else None
+    logger.info("Поиск: гибрид (лексика ⊕ вектор, RRF)" if gibrid else "Поиск: чистая лексика (эмбеддинги не посчитаны)")
 
     sessions = Sessions(cfg)
     bot = Bot(cfg.bot_token)
@@ -76,7 +83,7 @@ async def main() -> None:
                 await bot.send_chat_action(chat_id, "typing")
                 history = await sessions.zagruzit(chat_id)
                 t0 = time.time()
-                res = await run_agent(cfg.openrouter, poisk, history, user_text)
+                res = await run_agent(cfg.openrouter, poisk, history, user_text, gibrid=gibrid)
                 await sessions.sohranit(chat_id, res.new_history)
                 await message.answer(res.answer)
                 ms = int((time.time() - t0) * 1000)
@@ -95,6 +102,7 @@ async def main() -> None:
     finally:
         await sessions.zakryt()
         await bot.session.close()
+        await pool.close()
 
 
 if __name__ == "__main__":

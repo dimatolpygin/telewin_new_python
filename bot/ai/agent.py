@@ -77,8 +77,10 @@ class AgentResult:
 
 async def run_agent(
     cfg: OpenRouterConfig, poisk: Poisk, history: list[dict], user_text: str,
-    use_podgr: bool = True,
+    use_podgr: bool = True, gibrid=None,
 ) -> AgentResult:
+    """Если передан `gibrid` (этап 10) — поиск идёт через гибрид (лексика ⊕ вектор, RRF);
+    иначе через чистую лексику `poisk.iskat`. Это позволяет запускать бота без БД/эмбеддингов."""
     messages: list[dict] = [{"role": "system", "content": SYSTEM}, *history,
                             {"role": "user", "content": user_text}]
     zaprosy_poiska: list[str] = []
@@ -96,7 +98,10 @@ async def run_agent(
                 except (json.JSONDecodeError, KeyError, TypeError):
                     query = ""
                 zaprosy_poiska.append(query)
-                rezultaty, kanal = poisk.iskat(query, use_podgr=use_podgr)
+                if gibrid is not None:
+                    rezultaty, kanal = await gibrid.iskat(query, use_podgr=use_podgr)
+                else:
+                    rezultaty, kanal = poisk.iskat(query, use_podgr=use_podgr)
                 poslednee_naydeno = len(rezultaty)
                 payload = {
                     "дата_актуальности": ДАТА_ПРАЙСА,

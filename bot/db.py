@@ -7,8 +7,11 @@ import asyncpg
 
 from .config import Config
 
-# Порядок колонок таблицы telewin_test.products
+# Порядок колонок таблицы telewin_test.products.
+# `id` — первичный ключ; нужен, чтобы связать лексический и векторный каналы при RRF
+# (этап 10). Для поиска по json (без id) не мешает — лишний ключ в dict игнорируется.
 COLS = [
+    "id",
     "artikul", "shtrihkod", "imya", "edinica", "proizvoditel", "cena",
     "ostatok_obshiy", "ostatok_mikro", "ostatok_berez",
     "semeystvo", "gruppa", "podgruppa",
