@@ -183,6 +183,7 @@ class Poisk:
         qa = self.atributy_zaprosa(q)
         chisla = qa.pop("_числа", set())
         mat_subs, name_tokens = self.rulevye(q)
+        self._last_top = 0.0  # диагностика: балл лучшего кандидата (для калибровки порога)
 
         # прямой канал: штрихкод (EAN, 8-13 цифр) — самый специфичный
         for m in re.findall(r"\b\d{8,13}\b", q):
@@ -297,6 +298,7 @@ class Poisk:
                 if row["t"].get("podgruppa", "") in subs:
                     scored.append((ball(row, False, True), row["t"]))
         scored.sort(key=lambda x: -x[0])
+        self._last_top = scored[0][0] if scored else 0.0
 
         kanal = "+".join(c for c in (
             "подгр" if (use_podgr and subs) else "",
