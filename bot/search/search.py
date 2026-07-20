@@ -16,6 +16,7 @@ import collections
 
 from .normalize import stems, family_of, norm
 from .attributes import razobrat
+from .fuzzy import word_sim
 
 _DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
 
@@ -66,9 +67,11 @@ class Poisk:
         for t in tovary:
             imya = t.get("imya", "")
             imya_low = imya.lower()
+            sem = t.get("semeystvo") or family_of(imya)
             self.rows.append({
                 "t": t,
-                "семейство": t.get("semeystvo") or family_of(imya),
+                "семейство": sem,
+                "сем_стемы": stems(sem),   # стемы имени семейства (тай-брейк точного совпадения)
                 "атр": razobrat(imya),
                 "стемы": stems(imya),
                 "стемы_подгр": stems(t.get("podgruppa", "")),
@@ -96,6 +99,8 @@ class Poisk:
         # варианты названия семейства: само имя, канон, каждый синоним
         self.varianty = {}
         self.slovar_sem = {}
+        self.fam_key_stems = {}    # стемы ИМЕНИ семейства (главный сигнал фаззи)
+        self.fam_name_stems = {}   # стемы ИМЕНИ+канона семейства (для фаззи по опечатке)
         for f, e in self.slovar.items():
             vs = [f, e.get("канон", "")] + list(e.get("синонимы", []))
             self.varianty[f] = [stems(v) for v in vs if v and stems(v)]
@@ -103,6 +108,16 @@ class Poisk:
             for v in self.varianty[f]:
                 all_st |= v
             self.slovar_sem[f] = all_st
+            self.fam_key_stems[f] = stems(f)
+            self.fam_name_stems[f] = stems(f) | stems(e.get("канон", ""))
+
+        # словарь известных стемов (этап 8): всё, что встречается в именах товаров
+        # или в словаре домена. Слово запроса ВНЕ него — кандидат в опечатки (фаззи-канал).
+        self.vocab = set()
+        for ss in self.slovar_sem.values():
+            self.vocab |= ss
+        for row in self.rows:
+            self.vocab |= row["стемы"]
 
     @classmethod
     def from_json(cls, path: str | None = None, data_dir: str | None = None) -> "Poisk":
@@ -143,6 +158,31 @@ class Poisk:
             if re.search(rf"\b{re.escape(slovo)}\b", qn):
                 tokens.append(tok.lower())
         return mat_subs, tokens
+
+    def fuzzy_semeystva(self, qs: set, porog: float = 0.8):
+        """Фаззи-канал опечаток (этап 8): слово запроса ВНЕ словаря стенда (OOV)
+        сопоставляется по сходству слов с вариантами семейств словаря. Возвращает
+        [(сходство, семейство, слово)] для срабатываний ≥ porog. Жёсткие каналы
+        (штрихкод/артикул) отрабатывают раньше — фаззи их не трогает.
+
+        OOV-гард: реальные слова из имён товаров («труба», «кнопочный») в vocab и
+        не триггерят, поэтому «трубка»↔«труба» не путаются — путаются лишь опечатки."""
+        res = []
+        for w in qs:
+            if len(w) < 5 or w[:1].isdigit() or w in self.vocab:
+                continue
+            # Сопоставляем с ИМЕНЕМ/каноном семейства. Совпадение по имени-ключу
+            # весит выше, чем по канону/синониму: «выключетель» → Выключатель
+            # (имя), а не «Блок» (у Блока «выключатель» лишь в каноне). Инжектим
+            # все семейства ≥ порога — уточняющие слова выберут верное.
+            for f, ns in self.fam_name_stems.items():
+                name_sim = max((word_sim(w, v) for v in ns if len(v) >= 5), default=0.0)
+                if name_sim < porog:
+                    continue
+                key_sim = max((word_sim(w, v) for v in self.fam_key_stems[f] if len(v) >= 5), default=0.0)
+                eff = key_sim if key_sim >= porog else name_sim - 0.15
+                res.append((eff, f, w))
+        return res
 
     def semeystva_kandidaty(self, qs: set):
         res = []
@@ -212,12 +252,23 @@ class Poisk:
 
         sem_score = {}
         semi = []
+        fuzzy_fams = set()
+        fuzzy_words = set()   # OOV-слова-опечатки: не участвуют в utochn (чтобы «выкл»-префикс не бустил соседа)
         if use_slovar:
             kand = self.semeystva_kandidaty(qs)
             sem_score = {f: s for s, f in kand}
             if kand and kand[0][0] >= 0.6:
                 porog = kand[0][0] - 0.35
                 semi = [f for s, f in kand if s >= porog][:4]
+            # фаззи-канал опечаток: OOV-слово запроса -> семейство по сходству.
+            # Fusion: добавляет семейство-кандидата, не заменяя лексику; жёсткие
+            # каналы (штрихкод/артикул) уже отработали выше.
+            for si, f, w in self.fuzzy_semeystva(qs):
+                sem_score[f] = max(sem_score.get(f, 0.0), si)
+                fuzzy_fams.add(f)
+                fuzzy_words.add(w)
+                if f not in semi:
+                    semi.append(f)
 
         # канал подгруппы (опционально): добавляет строки-кандидаты по совпавшим подгруппам
         subs = set()
@@ -253,8 +304,8 @@ class Poisk:
         utochn = set()
         if kand_rows:
             for w in qs:
-                if w[:1].isdigit():
-                    continue
+                if w[:1].isdigit() or w in fuzzy_words:
+                    continue  # слово-опечатку не используем как уточняющее (его сигнал — в фаззи-балле)
                 df = sum(1 for r in kand_rows if soft_has(r["стемы"], w))
                 if df / len(kand_rows) < 0.5:
                     utochn.add(w)
@@ -295,6 +346,10 @@ class Poisk:
                         s += 3.0
             # пересечение слов запроса с именем товара
             s += 1.2 * len(qs & row["стемы"])
+            # тай-брейк: имя семейства полностью названо запросом, без лишних слов
+            # («ножовка» → «Ножовка», а не «Ножовка-ручка»)
+            if row["сем_стемы"] and row["сем_стемы"] <= qs:
+                s += 0.4
             # наличие товара — при прочих равных
             try:
                 s += 0.3 if float(row["t"].get("ostatok_obshiy") or 0) > 0 else 0
@@ -320,9 +375,15 @@ class Poisk:
         scored.sort(key=lambda x: -x[0])
         self._last_top = scored[0][0] if scored else 0.0
 
+        # победитель пришёл из фаззи-семейства? (для диагностики канала)
+        top_t = scored[0][1] if scored else None
+        top_fam = (top_t.get("semeystvo") or family_of(top_t.get("imya", ""))) if top_t else None
+        cherez_fuzzy = top_fam in fuzzy_fams
+
         kanal = "+".join(c for c in (
             "подгр" if (use_podgr and subs) else "",
-            "словарь" if semi else "",
+            "фаззи" if cherez_fuzzy else "",
+            "словарь" if (semi and not cherez_fuzzy) else "",
             "атрибуты",
         ) if c)
         return [t for _, t in scored[:top]], kanal
