@@ -5,6 +5,7 @@
 Учитываем, что products.json — НОВЫЙ прайс: если ожидаемого товара нет в файле
 вообще, кейс не засчитываем как провал (net_v_obraztse), как в poisk2.py.
 """
+import asyncio
 import json
 import os
 import re
@@ -15,13 +16,33 @@ from .search import Poisk, load_products_json
 _DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
 
 
+def _load_tovary(use_db: bool) -> list[dict]:
+    """Источник товаров: products.json (по умолчанию) или Postgres (--db)."""
+    if not use_db:
+        return load_products_json()
+    from ..config import load_config
+    from ..db import create_pool, zagruzit_vse_tovary
+
+    async def _fetch():
+        cfg = load_config()
+        pool = await create_pool(cfg)
+        try:
+            return await zagruzit_vse_tovary(pool, cfg.pg.schema)
+        finally:
+            await pool.close()
+
+    return asyncio.run(_fetch())
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     use_podgr = "--podgr" in sys.argv
+    use_db = "--db" in sys.argv
 
-    tovary = load_products_json()
+    tovary = _load_tovary(use_db)
     p = Poisk(tovary)
-    print(f"база: {p.размер_базы} товаров  (канал подгруппы: {'вкл' if use_podgr else 'выкл'})\n")
+    istochnik = "Postgres" if use_db else "products.json"
+    print(f"база: {p.размер_базы} товаров ({istochnik})  (канал подгруппы: {'вкл' if use_podgr else 'выкл'})\n")
 
     nabor = json.load(open(os.path.join(_DATA, "zolotoy_nabor.json"), encoding="utf-8"))
     names_in_file = {r.get("imya", "") for r in tovary}
