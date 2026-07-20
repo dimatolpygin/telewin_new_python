@@ -26,6 +26,23 @@ def load_products_json(path: str | None = None) -> list[dict]:
     return json.load(open(path, encoding="utf-8"))
 
 
+def soft_has(stem_set: set, w: str) -> bool:
+    """Мягкое совпадение слова с множеством стемов: точное ИЛИ один — префикс
+    другого (мин. 4 симв). Связывает сокращения прайса с полными формами:
+    «алмаз.»↔«алмазный», «оцинк.»↔«оцинкованный». Порт softHas из search.ts."""
+    if w in stem_set:
+        return True
+    if len(w) < 4:
+        return False
+    for x in stem_set:
+        if len(x) < 4:
+            continue
+        short, long = (x, w) if len(x) < len(w) else (w, x)
+        if long.startswith(short) and len(short) >= 4:
+            return True
+    return False
+
+
 class Poisk:
     def __init__(self, tovary: list[dict], data_dir: str | None = None):
         data_dir = data_dir or _DATA
@@ -51,6 +68,15 @@ class Poisk:
         self.podgr_stems = {}
         for row in self.rows:
             self.podgr_stems.setdefault(row["t"].get("podgruppa", ""), row["стемы_подгр"])
+
+        # индекс канала производителя: производитель -> его стемы и его строки
+        self.proizv_stems = {}
+        self.po_proizv = collections.defaultdict(list)
+        for row in self.rows:
+            pr = row["t"].get("proizvoditel", "")
+            self.po_proizv[pr].append(row)
+            if pr not in self.proizv_stems:
+                self.proizv_stems[pr] = stems(pr)
 
         # варианты названия семейства: само имя, канон, каждый синоним
         self.varianty = {}
@@ -116,8 +142,24 @@ class Poisk:
         res.sort(reverse=True)
         return res
 
-    def iskat(self, q: str, top: int = 5, use_podgr: bool = False):
-        """Возвращает (список_товаров, канал). Товары — оригинальные dict из products.json."""
+    def proizvoditeli_po_zaprosu(self, qs: set):
+        """Производители, чьё имя ПОЛНОСТЬЮ названо в запросе («что есть от бибера»).
+        Полное покрытие + токен ≥3 симв — чтобы не ловить короткие/общие слова."""
+        res = []
+        for pr, ss in self.proizv_stems.items():
+            if not ss or not pr:
+                continue
+            if ss <= qs and any(len(w) >= 3 for w in ss):
+                res.append(pr)
+        return res
+
+    def iskat(self, q: str, top: int = 5, use_podgr: bool = False, use_slovar: bool = True,
+              use_proizv: bool = True):
+        """Возвращает (список_товаров, канал). Товары — оригинальные dict из products.json.
+
+        use_slovar / use_podgr — для аблации вклада каналов (режимы 2A/2B/2C как в poisk2.py).
+        Прямые каналы (штрихкод/артикул) работают всегда — они не зависят от словаря.
+        """
         qs = stems(q)
         qa = self.atributy_zaprosa(q)
         chisla = qa.pop("_числа", set())
@@ -134,13 +176,14 @@ class Poisk:
             if hit:
                 return hit[:top], "артикул"
 
-        kand = self.semeystva_kandidaty(qs)
-        sem_score = {f: s for s, f in kand}
-
+        sem_score = {}
         semi = []
-        if kand and kand[0][0] >= 0.6:
-            porog = kand[0][0] - 0.35
-            semi = [f for s, f in kand if s >= porog][:4]
+        if use_slovar:
+            kand = self.semeystva_kandidaty(qs)
+            sem_score = {f: s for s, f in kand}
+            if kand and kand[0][0] >= 0.6:
+                porog = kand[0][0] - 0.35
+                semi = [f for s, f in kand if s >= porog][:4]
 
         # канал подгруппы (опционально): добавляет строки-кандидаты по совпавшим подгруппам
         subs = set()
@@ -152,8 +195,35 @@ class Poisk:
                 best_sub = max(sub_score.values())
                 subs = {sub for sub, s in sub_score.items() if s >= best_sub - 0.2 and s > 0}
 
-        if not semi and not subs:
+        # канал производителя (fallback-recall): срабатывает, когда словарь не дал
+        # семейства, а в запросе полностью назван производитель («что есть от бибера»).
+        proizv = []
+        if use_proizv and not semi:
+            proizv = self.proizvoditeli_po_zaprosu(qs)
+
+        if not semi and not subs and not proizv:
             return [], "не найдено"
+
+        if proizv and not semi and not subs:
+            # чистый запрос по производителю: отдаём его товары (в наличии — выше)
+            rows = [r["t"] for pr in proizv for r in self.po_proizv.get(pr, [])]
+            rows.sort(key=lambda t: -(float(t.get("ostatok_obshiy") or 0)))
+            return rows[:top], "производитель"
+
+        # Уточняющие слова-подтипы (порт из search.ts): слово РАЗЛИЧАЕТ товар, если
+        # встречается у МЕНЬШИНСТВА строк семейств-кандидатов. «саморез» есть у всех
+        # саморезов (не различает), «чёрный»/«оцинк» — у части (различает подтип).
+        kand_rows = []
+        for f in semi:
+            kand_rows.extend(self.po_sem.get(f, []))
+        utochn = set()
+        if kand_rows:
+            for w in qs:
+                if w[:1].isdigit():
+                    continue
+                df = sum(1 for r in kand_rows if soft_has(r["стемы"], w))
+                if df / len(kand_rows) < 0.5:
+                    utochn.add(w)
 
         def ball(row, in_sem: bool, in_sub: bool) -> float:
             s = 0.0
@@ -169,6 +239,10 @@ class Poisk:
             for v in row["атр"].values():
                 if isinstance(v, float) and v in chisla:
                     s += 2.0
+            # уточняющие слова-подтипы: буст за совпадение (мягкое, по префиксу)
+            for w in utochn:
+                if soft_has(row["стемы"], w):
+                    s += 2.5
             # пересечение слов запроса с именем товара
             s += 1.2 * len(qs & row["стемы"])
             # наличие товара — при прочих равных

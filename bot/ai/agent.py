@@ -69,7 +69,7 @@ class AgentResult:
 
 async def run_agent(
     cfg: OpenRouterConfig, poisk: Poisk, history: list[dict], user_text: str,
-    use_podgr: bool = False,
+    use_podgr: bool = True,
 ) -> AgentResult:
     messages: list[dict] = [{"role": "system", "content": SYSTEM}, *history,
                             {"role": "user", "content": user_text}]
