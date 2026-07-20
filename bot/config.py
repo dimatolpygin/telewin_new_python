@@ -1,0 +1,65 @@
+# -*- coding: utf-8 -*-
+"""Конфигурация из .env. Порт config.ts.
+Читаем через python-dotenv; обязательные переменные — через must()."""
+import os
+from dataclasses import dataclass
+from dotenv import load_dotenv
+
+# .env лежит рядом с пакетом (корень tgbot_py)
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_ROOT, ".env"))
+
+
+def must(name: str) -> str:
+    v = os.environ.get(name)
+    if not v:
+        raise SystemExit(f"Не задана переменная окружения {name} (см. .env.example)")
+    return v
+
+
+@dataclass(frozen=True)
+class PgConfig:
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
+    schema: str
+
+
+@dataclass(frozen=True)
+class OpenRouterConfig:
+    api_key: str
+    model: str
+    base_url: str
+
+
+@dataclass(frozen=True)
+class Config:
+    bot_token: str
+    openrouter: OpenRouterConfig
+    pg: PgConfig
+    redis_url: str
+    price_xls: str
+
+
+def load_config() -> Config:
+    """Собирает конфиг, требуя критичные переменные. Вызывать при старте."""
+    return Config(
+        bot_token=must("BOT_TOKEN"),
+        openrouter=OpenRouterConfig(
+            api_key=must("OPENROUTER_API_KEY"),
+            model=os.environ.get("OPENROUTER_MODEL", "anthropic/claude-haiku-4.5"),
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        pg=PgConfig(
+            host=os.environ.get("PGHOST", "127.0.0.1"),
+            port=int(os.environ.get("PGPORT", "5432")),
+            user=os.environ.get("PGUSER", "postgres"),
+            password=os.environ.get("PGPASSWORD", "postgres"),
+            database=os.environ.get("PGDATABASE", "mydb"),
+            schema=os.environ.get("PGSCHEMA", "telewin_test"),
+        ),
+        redis_url=os.environ.get("REDIS_URL", "redis://127.0.0.1:6379"),
+        price_xls=os.environ.get("PRICE_XLS", ""),
+    )
