@@ -144,6 +144,23 @@ class Poisk:
         a["_числа"] = {float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[.,]\d+)?", qn)}
         return a
 
+    _DEP_PREP = {"для", "под"}
+
+    def head_dep(self, q: str):
+        """Головное слово vs зависимое (этап 9). «муфта ДЛЯ трубы ПП» → head=муфта
+        (что ищем), dep=труба/пп/20 (с чем совместимо). Возвращает (head_стемы,
+        dep_стемы) или (None, None), если структуры «X для/под Y» нет."""
+        toks = re.findall(r"[а-я0-9][а-я0-9.,/]*", norm(q))
+        idx = next((i for i, t in enumerate(toks) if t.strip(".,") in self._DEP_PREP), None)
+        if not idx:  # None или 0 (запрос начинается с предлога) — структуры нет
+            return None, None
+        hs, ds = set(), set()
+        for t in toks[:idx]:
+            hs |= stems(t)
+        for t in toks[idx + 1:]:
+            ds |= stems(t)
+        return hs, ds
+
     def rulevye(self, q: str):
         """Рулевые сигналы запроса (этап 6): подгруппы по слову-материалу и
         токены-в-имени по сленгу. Детект по границе слова в норм. запросе — мимо
@@ -236,6 +253,8 @@ class Poisk:
         mat_subs, name_tokens = self.rulevye(q)
         # материал, названный в запросе (этап 7): «по дереву/бетону/металлу…»
         zapros_materialy = {self.material_stems[s] for s in qs if s in self.material_stems}
+        # головное vs зависимое слово (этап 9): «муфта для трубы» → head=муфта
+        head_st, dep_st = self.head_dep(q)
         self._last_top = 0.0  # диагностика: балл лучшего кандидата (для калибровки порога)
 
         # прямой канал: штрихкод (EAN, 8-13 цифр) — самый специфичный
@@ -350,6 +369,14 @@ class Poisk:
             # («ножовка» → «Ножовка», а не «Ножовка-ручка»)
             if row["сем_стемы"] and row["сем_стемы"] <= qs:
                 s += 0.4
+            # головное слово (этап 9): семейство = head запроса — буст; семейство =
+            # лишь зависимое («для трубы») — штраф. «муфта для трубы»→Муфта, не Труба.
+            if head_st is not None:
+                fam = row["сем_стемы"]
+                if fam & head_st:
+                    s += 2.5
+                elif fam and dep_st and fam <= dep_st:
+                    s -= 2.5
             # наличие товара — при прочих равных
             try:
                 s += 0.3 if float(row["t"].get("ostatok_obshiy") or 0) > 0 else 0
