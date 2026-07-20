@@ -48,6 +48,10 @@ class Poisk:
         data_dir = data_dir or _DATA
         self.slovar = json.load(open(os.path.join(data_dir, "slovar_svodnyy.json"), encoding="utf-8"))
         self.sleng = json.load(open(os.path.join(data_dir, "sleng_razmerov.json"), encoding="utf-8"))
+        # рулевой словарь этапа 6: материал->подгруппа, сленг-слово->токен в имени
+        mat = json.load(open(os.path.join(data_dir, "materialy.json"), encoding="utf-8"))
+        self.material_podgr = mat.get("материал_подгруппа", {})
+        self.slovo_v_imeni = mat.get("слово_в_имени", {})
 
         # индексная строка: оригинальный товар + вычисленные поля поиска
         self.rows = []
@@ -114,6 +118,21 @@ class Poisk:
         a["_числа"] = {float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[.,]\d+)?", qn)}
         return a
 
+    def rulevye(self, q: str):
+        """Рулевые сигналы запроса (этап 6): подгруппы по слову-материалу и
+        токены-в-имени по сленгу. Детект по границе слова в норм. запросе — мимо
+        стеммера, чтобы «пп»/«пэ» не слипались с другими словами."""
+        qn = norm(q)
+        mat_subs = set()
+        for slovo, subs in self.material_podgr.items():
+            if re.search(rf"\b{re.escape(slovo)}\b", qn):
+                mat_subs.update(subs)
+        tokens = []
+        for slovo, tok in self.slovo_v_imeni.items():
+            if re.search(rf"\b{re.escape(slovo)}\b", qn):
+                tokens.append(tok.lower())
+        return mat_subs, tokens
+
     def semeystva_kandidaty(self, qs: set):
         res = []
         for f, vs in self.varianty.items():
@@ -163,6 +182,7 @@ class Poisk:
         qs = stems(q)
         qa = self.atributy_zaprosa(q)
         chisla = qa.pop("_числа", set())
+        mat_subs, name_tokens = self.rulevye(q)
 
         # прямой канал: штрихкод (EAN, 8-13 цифр) — самый специфичный
         for m in re.findall(r"\b\d{8,13}\b", q):
@@ -243,6 +263,15 @@ class Poisk:
             for w in utochn:
                 if soft_has(row["стемы"], w):
                     s += 2.5
+            # рулевой словарь (этап 6): материал -> нужная подгруппа Форы
+            if mat_subs and row["t"].get("podgruppa", "") in mat_subs:
+                s += 4.0
+            # рулевой словарь: сленг-слово -> токен в имени (филипс->PH, американка->амер)
+            if name_tokens:
+                imya_low = row["t"].get("imya", "").lower()
+                for tok in name_tokens:
+                    if tok in imya_low:
+                        s += 3.0
             # пересечение слов запроса с именем товара
             s += 1.2 * len(qs & row["стемы"])
             # наличие товара — при прочих равных
