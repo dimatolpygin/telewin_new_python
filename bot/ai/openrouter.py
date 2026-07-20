@@ -15,16 +15,19 @@ class OpenRouterError(Exception):
         self.retry = retry
 
 
-async def chat(cfg: OpenRouterConfig, messages: list[dict], tools: list[dict] | None = None) -> dict:
+async def chat(cfg: OpenRouterConfig, messages: list[dict], tools: list[dict] | None = None,
+               tool_choice: str = "auto") -> dict:
     """Возвращает message ассистента: {'content': str|None, 'tool_calls': [...]|None}.
 
-    До 3 попыток: сетевой сбой и 429/5xx — временные, повторяем с ростом паузы.
-    4xx (кроме 429) — ошибка запроса, повтор бесполезен.
+    tool_choice: «auto» — модель сама решает; «required» — обязана вызвать инструмент
+    (предохранитель агента: форсируем поиск, если модель заявила отсутствие товара, не
+    заглянув в прайс). До 3 попыток: сетевой сбой и 429/5xx — временные, повторяем с
+    ростом паузы. 4xx (кроме 429) — ошибка запроса, повтор бесполезен.
     """
     body: dict = {"model": cfg.model, "messages": messages, "temperature": 0.2}
     if tools:
         body["tools"] = tools
-        body["tool_choice"] = "auto"
+        body["tool_choice"] = tool_choice
 
     headers = {
         "Content-Type": "application/json",
