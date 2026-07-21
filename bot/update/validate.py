@@ -10,7 +10,7 @@
   - файл существует и весит правдоподобно (> MIN_RAZMER — отсекает пустышку 51 200 Б);
   - открывается как .xls (иначе это HTML-заглушка/мусор с расширением .xls);
   - строк не меньше MIN_STROK (боевой ~11 864; обрезанный/битый — единицы);
-  - колонок не меньше NUZHNO_KOLONOK (раскладка 11-кол; автоопределение 8↔11 — этап 18).
+  - колонок не меньше MIN_KOLONOK (8 или 11; точную раскладку определяет parser, этап 18).
 """
 import os
 
@@ -18,7 +18,7 @@ import xlrd
 
 MIN_RAZMER = 500_000       # байт: пустышка FTP = 51 200, боевой = 2.4–3.2 МБ → порог с запасом
 MIN_STROK = 1000           # боевой ~11 864; обрезанный/битый файл — заметно меньше
-NUZHNO_KOLONOK = 11        # 11-колоночная раскладка 18.07 (этап 18 добавит 8-кол)
+MIN_KOLONOK = 8            # 8-кол старый или 11-кол новый; точную раскладку решает parser (этап 18)
 
 
 class ValidationError(Exception):
@@ -47,9 +47,10 @@ def proverit(path: str) -> dict:
         raise ValidationError(
             f"мало строк: {sheet.nrows} < {MIN_STROK} — файл обрезан или битый"
         )
-    if sheet.ncols < NUZHNO_KOLONOK:
+    if sheet.ncols < MIN_KOLONOK:
         raise ValidationError(
-            f"мало колонок: {sheet.ncols} < {NUZHNO_KOLONOK} — не 11-колоночная раскладка"
+            f"мало колонок: {sheet.ncols} < {MIN_KOLONOK} — не похоже на прайс "
+            f"(точную раскладку 8/11 определяет parser)"
         )
 
     return {"razmer": razmer, "strok": sheet.nrows, "kolonok": sheet.ncols}

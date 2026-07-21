@@ -15,8 +15,7 @@
 переиспользует коды под разные товары (200 дублей, 188 с разными именами). Fallback для
 строк без штрихкода — (артикул, имя); сейчас таких 0, заложено на будущее.
 
-Парсер файла пока локальный, под 11-колоночную раскладку 18.07 (та же у фикстура). Общий
-парсер с АВТООПРЕДЕЛЕНИЕМ раскладки (8 vs 11 колонок) — этап 18, тогда `_prochitat` уедет туда.
+Парс файла вынесен в `bot/update/parser.py` (этап 18) с автоопределением раскладки 8↔11.
 
 Запуск: python -m bot.update.sync <путь_к_xls>
         python -m bot.update.sync <путь> --apply-embed   # + инкрементальный re-embed (этап 20)
@@ -25,55 +24,14 @@ import asyncio
 import os
 import sys
 
-import xlrd
-
 from ..config import load_config
 from ..db import create_pool
 from ..logger import logger
 from . import meta
+from .parser import prochitat as _prochitat  # этап 18: автоопределение раскладки 8↔11
 
-# Раскладка 11-кол (0-based): 0 артикул 1 штрихкод 2 имя 3 ед 4 произв
-#   5 цена 6 ост.общий 7 ост.Микро 8 ост.Берёз 9 группа 10 подгруппа
 _ENRICH = ("imya", "semeystvo", "gruppa", "podgruppa")  # смена любого → embedding=NULL
 _FACTS = ("cena", "ostatok_obshiy", "ostatok_mikro", "ostatok_berez", "proizvoditel", "edinica")
-
-
-def _na(v) -> str:
-    return str(v).strip().strip("\t").strip()
-
-
-def _num(v):
-    try:
-        return float(str(v).replace(",", "."))
-    except (ValueError, TypeError):
-        return None
-
-
-def _family_of(n: str) -> str:
-    p = n.split()
-    if not p:
-        return "?"
-    w = p[0].strip(",.")
-    if w.upper() == "ШС" and len(p) > 1:
-        return "ШС " + p[1].strip(",.")
-    return w
-
-
-def _prochitat(path: str) -> list[dict]:
-    """Читает .xls (11-кол раскладка) → список позиций (ключи как в products.json).
-    Раскладка захардкожена; автоопределение (8 vs 11) — этап 18."""
-    b = xlrd.open_workbook(path, encoding_override="cp1251")
-    sh = b.sheet_by_index(0)
-    out = []
-    for r in range(sh.nrows):
-        v = [_na(sh.cell_value(r, c)) for c in range(11)]
-        out.append({
-            "artikul": v[0], "shtrihkod": v[1], "imya": v[2], "edinica": v[3],
-            "proizvoditel": v[4], "cena": _num(v[5]), "ostatok_obshiy": _num(v[6]),
-            "ostatok_mikro": _num(v[7]), "ostatok_berez": _num(v[8]),
-            "semeystvo": _family_of(v[2]), "gruppa": v[9], "podgruppa": v[10],
-        })
-    return out
 
 
 def _kl(t: dict):
