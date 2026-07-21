@@ -174,8 +174,12 @@ def _zapisat_svodku(path, itog, reembed, novye_sem, novye_pg, dt) -> None:
     ]
     if novye_sem or novye_pg:
         lines.append("\n> Подробности новизны и что делать со словарём — `docs/NOVELTY.md`.\n")
-    os.makedirs(os.path.dirname(_REPORT), exist_ok=True)
-    open(_REPORT, "w", encoding="utf-8").write("".join(lines))
+    # Сводка — вспомогательный артефакт: её запись не должна рушить пайплайн/код возврата.
+    try:
+        os.makedirs(os.path.dirname(_REPORT), exist_ok=True)
+        open(_REPORT, "w", encoding="utf-8").write("".join(lines))
+    except OSError as e:
+        logger.warning(f"не удалось записать сводку {_REPORT}: {e} (пайплайн продолжен)")
 
 
 # Код возврата для host-cron (этап 33): 10 = применён НОВЫЙ прайс с реальными изменениями

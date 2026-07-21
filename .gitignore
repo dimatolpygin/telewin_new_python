@@ -15,3 +15,8 @@ logs/
 data/products.json
 *.log
 .secrets/
+
+# Генерируемые отчёты обновления прайса (создаются на проде контейнером uid 1000 —
+# в git не держим, иначе deploy воссоздаёт их root-owned и контейнер не может перезаписать)
+docs/NOVELTY.md
+docs/UPDATE_RUN.md

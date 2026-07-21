@@ -193,8 +193,14 @@ def _zapisat_otchet(path: str, active: list, closed: list, novye_pg: list) -> No
             ls = r["last_seen"].strftime("%d.%m.%Y") if r["last_seen"] else "—"
             lines.append(f"| `{r['semeystvo']}` | {fs} | {ls} |\n")
 
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    open(path, "w", encoding="utf-8").write("".join(lines))
+    # Отчёт — вспомогательный артефакт: его запись НЕ должна рушить пайплайн обновления
+    # (иначе, напр., PermissionError на docs/NOVELTY.md обрывал цикл ПОСЛЕ upsert'а и ломал
+    # код возврата — рестарт бота не срабатывал, хотя каталог уже изменился). Best-effort.
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w", encoding="utf-8").write("".join(lines))
+    except OSError as e:
+        logger.warning(f"не удалось записать отчёт новизны {path}: {e} (пайплайн продолжен)")
 
 
 async def _pokazat_worklist(pool: asyncpg.Pool, schema: str) -> None:
