@@ -20,6 +20,10 @@ from .fuzzy import word_sim
 
 _DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
 
+# Цветовые температуры ламп (этап 14): 4-значные, чтобы не путать с артикулом при
+# лампа-контексте («лампа тёплый свет 2700» ≠ товар с артикулом 2700).
+_TEMP_ARTIKUL_GUARD = {"2700", "3000", "3500", "4000", "4500", "5000", "5700", "6000", "6400", "6500"}
+
 
 def load_products_json(path: str | None = None) -> list[dict]:
     """Загрузка товаров из products.json (этап 1)."""
@@ -141,6 +145,17 @@ class Poisk:
                 a.setdefault("дюймы", d)
         if "пол дюйма" in qn or "полдюйма" in qn:
             a["дюймы"] = "1/2"
+        # цоколь лампы (этап 14): формы/сленг («миньон»→E14) поверх прямого разбора
+        # razobrat. Матчим по q.lower(), НЕ по qn: norm-гомоглиф латинскую x→кир х
+        # («gx53»→«gх53») и латинские коды цоколя ломались бы.
+        ql = q.lower()
+        for slovo, c in self.sleng.get("цоколь", {}).items():
+            if re.search(rf"\b{re.escape(slovo)}\b", ql):
+                a.setdefault("цоколь", c)
+        # цветовая температура (этап 14): слово тёплый/холодный/нейтральный → К
+        for slovo, t in self.sleng.get("цв_температура", {}).items():
+            if re.search(rf"\b{re.escape(slovo)}\b", qn):
+                a.setdefault("цв_температура", int(t))
         a["_числа"] = {float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[.,]\d+)?", qn)}
         return a
 
@@ -262,8 +277,13 @@ class Poisk:
             hit = [r["t"] for r in self.rows if r["t"].get("shtrihkod") == m]
             if hit:
                 return hit[:top], "штрихкод"
-        # прямой канал: артикул (4-6 цифр)
+        # прямой канал: артикул (4-6 цифр). Но цветовая температура лампы (2700/4000/
+        # 6500…) — тоже 4 цифры: при лампа-контексте НЕ трактуем её как артикул
+        # (иначе «лампа тёплый свет 2700» короткозамыкает на товар с артикулом 2700).
+        lamp_ctx = bool(re.search(r"ламп|свет|цокол|тепл|холодн|нейтральн", norm(q)))
         for m in re.findall(r"\b\d{4,6}\b", q):
+            if lamp_ctx and m in _TEMP_ARTIKUL_GUARD:
+                continue
             hit = [r["t"] for r in self.rows
                    if r["t"].get("artikul") == m or str(r["t"].get("artikul", "")).lstrip("0") == m.lstrip("0")]
             if hit:
