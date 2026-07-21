@@ -26,6 +26,10 @@ services:
 
   app:
     build: .
+    # Явное имя образа, чтобы его переиспользовал `updater` (тот же код, другая команда).
+    # Иначе updater собирал бы отдельный образ, который deploy (`up --build`, без profile
+    # tools) НЕ пересобирает → updater уезжает на старый код (этап 33: ломало код возврата).
+    image: telewin-bot:latest
     env_file: .env
     environment:
       # переопределяем на сервисы compose (в .env стоят localhost:5434 для локали)
@@ -45,7 +49,9 @@ services:
   # с `up` (profile tools). Запуск по расписанию — host cron/systemd:
   #   docker compose run --rm updater
   updater:
-    build: .
+    # Переиспользуем образ app (сборка app при deploy обновляет и updater — без своего build,
+    # иначе профильный сервис остаётся на старом коде). На чистом хосте app билдится первым.
+    image: telewin-bot:latest
     profiles: ["tools"]
     env_file: .env
     environment:
