@@ -35,12 +35,22 @@ class OpenRouterConfig:
 
 
 @dataclass(frozen=True)
+class FtpConfig:
+    host: str
+    port: int
+    user: str
+    password: str
+    directory: str
+
+
+@dataclass(frozen=True)
 class Config:
     bot_token: str
     openrouter: OpenRouterConfig
     pg: PgConfig
     redis_url: str
     price_xls: str
+    ftp: FtpConfig | None
 
 
 def load_config() -> Config:
@@ -62,4 +72,19 @@ def load_config() -> Config:
         ),
         redis_url=os.environ.get("REDIS_URL", "redis://127.0.0.1:6379"),
         price_xls=os.environ.get("PRICE_XLS", ""),
+        ftp=_ftp_config(),
+    )
+
+
+def _ftp_config() -> FtpConfig | None:
+    """FTP-источник свежего прайса (этап 17). Нет хоста → None (работает локальный PRICE_XLS)."""
+    host = os.environ.get("PRICE_FTP_HOST", "").strip()
+    if not host:
+        return None
+    return FtpConfig(
+        host=host,
+        port=int(os.environ.get("PRICE_FTP_PORT", "21")),
+        user=os.environ.get("PRICE_FTP_USER", ""),
+        password=os.environ.get("PRICE_FTP_PASSWORD", ""),
+        directory=os.environ.get("PRICE_FTP_DIR", "price"),
     )

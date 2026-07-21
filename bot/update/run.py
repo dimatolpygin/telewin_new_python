@@ -5,9 +5,8 @@
 
     fetch → validate → parse → upsert → embed → monitor → дата
 
-- **fetch** (приём с FTP, этап 17) пока ВНЕ скоупа: файл берётся локально — аргумент CLI
-  или `PRICE_XLS` из `.env`. Точка подключения FTP — `_poluchit_fail` (скачать во временную
-  папку, вернуть путь); валидацию размера при скачивании закроет уже действующий `validate`.
+- **fetch** (этап 17): `--ftp` скачивает свежий файл с FTP Форы во временную папку (размер-гейт
+  до загрузки, `bot/update/istochnik.py`); без флага — локально (аргумент CLI / `PRICE_XLS`).
 - **validate** (этап 22, `validate.proverit`) — ДО любых записей: пустышка/битый/не тот
   формат → `ValidationError` → цикл отменён, БД цела, в логе причина.
 - **parse → upsert → дата → embed → monitor** — делегируются в `sync()` (этапы 19/20/21).
@@ -18,6 +17,7 @@
 прогон того же файла даёт 0 вставок/правок/удалений (всё skip), вектора не трогаются.
 
 Запуск:
+    python -m bot.update.run --ftp           # скачать свежий с FTP Форы и прогнать цикл
     python -m bot.update.run                 # файл из PRICE_XLS (.env)
     python -m bot.update.run <путь_к_xls>     # явный файл
     python -m bot.update.run <путь> --no-embed    # без re-embed (отладка, без денег/времени)
@@ -35,6 +35,7 @@ import time
 from ..config import load_config
 from ..logger import logger
 from . import validate
+from .istochnik import IstochnikError
 from .sync import sync
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,15 +43,19 @@ _REPORT = os.path.join(_ROOT, "docs", "UPDATE_RUN.md")
 
 
 def _poluchit_fail(cfg) -> str:
-    """Откуда берём файл прайса. Этап 17 (FTP-приём) подключится ЗДЕСЬ: скачать во
-    временную папку и вернуть путь. Пока — локальный файл: аргумент CLI, иначе PRICE_XLS."""
+    """Откуда берём файл прайса (этап 17):
+    - `--ftp` → скачать свежий с FTP Форы во временную папку (размер-гейт до загрузки);
+    - иначе локально: аргумент CLI, иначе PRICE_XLS из .env."""
+    if "--ftp" in sys.argv:
+        from .istochnik import sozdat_ftp_istochnik
+        return sozdat_ftp_istochnik(cfg).poluchit_svezhiy()
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if args:
         return args[0]
     if cfg.price_xls:
         return cfg.price_xls
     raise SystemExit(
-        "Не задан файл прайса: python -m bot.update.run <путь> или PRICE_XLS в .env"
+        "Не задан файл прайса: python -m bot.update.run <путь> | --ftp | PRICE_XLS в .env"
     )
 
 
@@ -61,9 +66,13 @@ async def run(path: str | None = None, apply_embed: bool = True,
     cfg = load_config()
     t0 = time.monotonic()
 
-    # 1) fetch — точка подключения FTP (этап 17); пока локальный путь
+    # 1) fetch — источник файла (этап 17): FTP `--ftp` или локальный путь
     if path is None:
-        path = _poluchit_fail(cfg)
+        try:
+            path = _poluchit_fail(cfg)
+        except IstochnikError as e:
+            logger.error(f"ОТМЕНА: не удалось получить файл прайса — {e}. БД НЕ изменена.")
+            raise SystemExit(2)
     logger.info(f"=== Обновление прайса: {os.path.basename(path)} ===")
 
     # 2) validate — ДО любых записей в БД
