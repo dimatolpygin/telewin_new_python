@@ -13,10 +13,16 @@
 
 RRF: score(d) = Σ_канал  w_канал / (K + rank_канал(d)).  K сглаживает вклад хвоста.
 """
+import json
+import os
+import re
 from collections import defaultdict
 
 from .search import Poisk
+from .normalize import norm
 from .vector import VectorKanal
+
+_DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
 
 # Параметры слияния. Подобраны свипом по кэшу каналов на золотом+слепом наборах
 # (docs/ZAMER_GIBRID.md): при W_VEC>0.3 золотой набор регрессирует 38→37 (вектор
@@ -36,7 +42,7 @@ class Gibrid:
     """Обёртка над лексическим `Poisk` + векторным каналом. Хранит индекс id→товар
     для связывания каналов (товары загружены из БД, у каждого есть `id`)."""
 
-    def __init__(self, poisk: Poisk, vk: VectorKanal):
+    def __init__(self, poisk: Poisk, vk: VectorKanal, data_dir: str | None = None):
         self.poisk = poisk
         self.vk = vk
         self.по_id = {}
@@ -44,10 +50,33 @@ class Gibrid:
             i = row["t"].get("id")
             if i is not None:
                 self.по_id[i] = row["t"]
+        # словарь чужого домена (этап 12, абстейн-гейт)
+        cd = json.load(open(os.path.join(data_dir or _DATA, "chuzhoy_domen.json"), encoding="utf-8"))
+        self._chuzhoy_kval = [k.lower() for k in cd.get("квалификаторы", [])]
+        self._chuzhoy_tov = [re.compile(rf"\b{re.escape(t.strip())}") for t in cd.get("чужие_товары", [])]
+
+    def _chuzhoy_domen(self, q: str) -> str | None:
+        """Гейт абстейна (этап 12): запрос из ЧУЖОГО домена (косметика/еда/техника/
+        одежда/зоо) → маркер. Квалификаторы («для волос», «зубная») ловятся подстрокой,
+        чужие товары («телевизор») — по границе слова. Реальный ассортимент (мыло,
+        белизна, масло пихтовое, репеллент) маркеров не содержит и не гейтится."""
+        qn = norm(q)
+        for k in self._chuzhoy_kval:
+            if k in qn:
+                return k
+        for rx in self._chuzhoy_tov:
+            if rx.search(qn):
+                return rx.pattern
+        return None
 
     async def iskat(self, q: str, top: int = 5, use_podgr: bool = True,
                     use_slovar: bool = True, use_proizv: bool = True):
         """Возвращает (список_товаров, канал) — как `Poisk.iskat`, но с векторным слиянием."""
+        # абстейн-гейт (этап 12): чужой домен → «не найдено» ДО поиска (не выдумываем
+        # близкий товар и не тратим векторный вызов). Утечки шли и через лексику, поэтому
+        # гейт стоит перед всеми каналами.
+        if self._chuzhoy_domen(q):
+            return [], "чужой домен"
         lex, kanal = self.poisk.iskat(
             q, top=ГЛУБИНА, use_podgr=use_podgr, use_slovar=use_slovar, use_proizv=use_proizv
         )
