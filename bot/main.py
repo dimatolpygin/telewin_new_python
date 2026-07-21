@@ -1,48 +1,86 @@
 # -*- coding: utf-8 -*-
-"""Точка входа процесса. Собирает общие зависимости (БД, поиск, ядро) и запускает
-каналы поверх единого ядра `Yadro`.
+"""Точка входа процесса: оркестрация каналов TG+VK+MAX на общем ядре (этап 29).
 
-Этап 25: пока поднимается только Telegram-адаптер. Каналы VK/MAX (этапы 27/28) и
-их совместная оркестрация (этап 29) встают на то же ядро — индекс поиска грузится
-один раз и общий для всех каналов.
+Индекс поиска (11 864 товара) грузится ОДИН раз (`sozdat_yadro`) и делится всеми
+каналами. Каждый канал крутится своей задачей под супервизором: падение одного
+логируется и не роняет остальные (перезапуск с паузой). Каналы без токена не
+поднимаются (адаптеры возвращаются сразу) — можно работать подмножеством.
+Корректное завершение по SIGTERM/SIGINT: отмена задач, закрытие redis/pool/сессий.
 Запуск: python -m bot.main
 """
 import asyncio
+import signal
 
-from .config import load_config
+from .config import Config, load_config
 from .logger import logger
+from .bootstrap import sozdat_yadro
 from .core import Yadro
-from .session import Sessions
-from .search.search import Poisk
 from .channels.telegram import run_telegram
+from .channels.vk import run_vk
+from .channels.max import run_max
+
+# (имя, функция-запуска) — единый список каналов. Добавить канал = одна строка.
+KANALY = [("telegram", run_telegram), ("vk", run_vk), ("max", run_max)]
+
+_RESTART_PAUZA = 5.0  # сек между падением канала и перезапуском
+
+
+async def _supervise(name: str, fn, cfg: Config, yadro: Yadro) -> None:
+    """Запустить канал под надзором. Штатное завершение (канал выключен) → выход.
+    Падение → лог + перезапуск через паузу. Отмена (shutdown) пробрасывается."""
+    while True:
+        try:
+            await fn(cfg, yadro)
+            logger.info(f"Канал {name} завершил работу")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Канал {name} упал: {e}; перезапуск через {int(_RESTART_PAUZA)}с",
+                         exc_info=True)
+            await asyncio.sleep(_RESTART_PAUZA)
+
+
+def _ustanovit_signaly(stop: asyncio.Event) -> None:
+    """Best-effort обработчики SIGINT/SIGTERM → выставить событие остановки.
+    На Windows add_signal_handler недоступен — там ловим KeyboardInterrupt в __main__."""
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, RuntimeError):
+            try:
+                signal.signal(sig, lambda *_: stop.set())
+            except (ValueError, OSError):
+                pass
 
 
 async def main() -> None:
     cfg = load_config()
+    yadro, pool, sessions = await sozdat_yadro(cfg)
 
-    # Товары из Postgres (как боевой TS-бот). Поиск держит всё в памяти процесса.
-    # Пул НЕ закрываем по ходу — векторный канал (этап 10) ходит в pgvector на каждый запрос.
-    from .db import create_pool, zagruzit_vse_tovary
-    from .search.vector import VectorKanal
-    from .search.gibrid import Gibrid
-    pool = await create_pool(cfg)
-    tovary = await zagruzit_vse_tovary(pool, cfg.pg.schema)
-    poisk = Poisk(tovary)
-    logger.info(f"Поиск готов: {poisk.размер_базы} товаров в базе")
+    tasks = [asyncio.create_task(_supervise(name, fn, cfg, yadro), name=name)
+             for name, fn in KANALY]
 
-    # Гибрид включаем, только если эмбеддинги посчитаны (иначе — чистая лексика).
-    vk = VectorKanal(pool, cfg.pg.schema)
-    gibrid = Gibrid(poisk, vk) if await vk.доступен() else None
-    logger.info("Поиск: гибрид (лексика ⊕ вектор, RRF)" if gibrid else "Поиск: чистая лексика (эмбеддинги не посчитаны)")
+    stop = asyncio.Event()
+    _ustanovit_signaly(stop)
 
-    sessions = Sessions(cfg)
-    yadro = Yadro(cfg, poisk, sessions, gibrid=gibrid, pool=pool)
-
+    # Ждём: либо сигнал остановки, либо все каналы завершились (все выключены).
+    stop_task = asyncio.create_task(stop.wait())
+    vse_kanaly = asyncio.gather(*tasks, return_exceptions=True)
     try:
-        await run_telegram(cfg, yadro)
+        await asyncio.wait({stop_task, vse_kanaly}, return_when=asyncio.FIRST_COMPLETED)
     finally:
+        logger.info("Останавливаюсь — закрываю каналы и соединения…")
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        stop_task.cancel()
         await sessions.zakryt()
         await pool.close()
+        logger.info("Остановлен. Соединения закрыты.")
 
 
 if __name__ == "__main__":
