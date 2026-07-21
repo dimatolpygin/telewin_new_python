@@ -813,11 +813,24 @@ chat_key, user_text, typing_cb=)` — замок на `(канал, чат)`, д
 - уровень `LOG_LEVEL`: на `debug` добавляются промпт/ответ ИИ, на `info` — нет (не течёт в прод).
 
 **Критерии приёмки** (закрытие → tag `stage-26-done`):
-- [ ] один запрос → в логах цепочка с ОДНИМ request-id: вход, ≥1 tool-call (аргументы+результат), вызов ИИ (латентность), исходящий
-- [ ] каждая строка лога несёт канал (`telegram`/`vk`/`max`) и request-id
-- [ ] ошибка в обработке → строка `ERROR` с traceback + request-id + канал + исходный текст запроса
-- [ ] вызов ИИ логирует модель + латентность (+ токены, если OpenRouter вернул `usage`)
-- [ ] `LOG_LEVEL=debug` добавляет промпт/ответ ИИ; на `info` их нет
+- [x] один запрос → в логах цепочка с ОДНИМ request-id: вход, ≥1 tool-call (аргументы+результат), вызов ИИ (латентность), исходящий
+      _(автотест: `👤`→`🔧 tool`→`🧠 ИИ …мс`→`🤖` под одним 8-символьным rid; два конкурентных запроса не смешиваются)_
+- [x] каждая строка лога несёт канал (`telegram`/`vk`/`max`) и request-id
+      _(`_KontekstFilter` подмешивает `[канал rid]` в каждую запись через contextvars per-task)_
+- [x] ошибка в обработке → строка `ERROR` с traceback + request-id + канал + исходный текст запроса
+      _(`log_oshibka(..., zapros=)` → `❌ … | запрос: '…'` + `exc_info` traceback + `[канал rid]`)_
+- [x] вызов ИИ логирует модель + латентность (+ токены, если OpenRouter вернул `usage`)
+      _(`openrouter.chat`: `🧠 ИИ {model} · {ms}мс · токены p+c=t`; латентность вокруг POST)_
+- [x] `LOG_LEVEL=debug` добавляет промпт/ответ ИИ; на `info` их нет
+      _(автотест: `info` → 0 строк с промптом; `debug` → `🧠 промпт:`/`🧠 ответ:`)_
+
+**Как сделано:** `bot/logger.py` — contextvars `_channel`/`_rid` + `_KontekstFilter` подмешивает их
+в КАЖДУЮ строку (формат `[канал rid]`), поэтому id не таскается параметром через
+`core → agent → openrouter`. `nachat_zapros(channel)` (contextmanager) открывает контекст запроса
+с новым rid — зовётся адаптером на входящем сообщении; contextvars per-task → конкурентные запросы
+не смешиваются. Помощники `log_vhodyashchee/tool_call/vyzov_ii/ishodyashchee/oshibka`. Латентность и
+токены — в `openrouter.chat` (вокруг POST, `usage` из ответа). `log_tool_call` — после каждого поиска
+в `agent.py`. Гейт `DEBUG_LOGS` (LOG_LEVEL=debug) включает промпт/ответ ИИ.
 
 ## Этап 27 — Канал VK (Bots Long Poll)
 
