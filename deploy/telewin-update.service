@@ -1,0 +1,18 @@
+# Этап 24 — systemd unit обновления прайса (oneshot, запускается таймером).
+# Установка и настройка путей — см. docs/DEPLOY_UPDATE.md.
+[Unit]
+Description=Telewin — обновление прайса из FTP (fetch → upsert → embed → monitor)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# ПУТЬ ПОД СЕБЯ: каталог репозитория tgbot_py на сервере
+WorkingDirectory=/opt/telewin/tgbot_py
+ExecStart=/opt/telewin/tgbot_py/scripts/update.sh
+# от чьего имени (не root) — создать пользователя заранее
+User=telewin
+# лог идёт и в файл (logs/update.log), и в journald
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=1800

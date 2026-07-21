@@ -40,17 +40,23 @@ class LokalnyyIstochnik:
     def __init__(self, path: str):
         self.path = path
 
-    def poluchit_svezhiy(self) -> str:
+    def svezhee_imya(self) -> str:
+        """Имя свежего файла без «скачивания» (для skip-если-уже-применён, этап 24)."""
         if os.path.isfile(self.path):
-            return self.path
+            return os.path.basename(self.path)
         if os.path.isdir(self.path):
             files = [f for f in os.listdir(self.path) if f.lower().endswith((".xls", ".xlsx"))]
             if not files:
                 raise IstochnikError(f"в папке нет .xls: {self.path}")
-            svezhiy = _svezhiy_po_imeni(files)
-            logger.info(f"Локальный источник: свежий файл {svezhiy}")
-            return os.path.join(self.path, svezhiy)
+            return _svezhiy_po_imeni(files)
         raise IstochnikError(f"путь не найден: {self.path}")
+
+    def poluchit_svezhiy(self) -> str:
+        if os.path.isfile(self.path):
+            return self.path
+        svezhiy = self.svezhee_imya()  # для папки
+        logger.info(f"Локальный источник: свежий файл {svezhiy}")
+        return os.path.join(self.path, svezhiy)
 
 
 class FtpIstochnik:
@@ -66,16 +72,39 @@ class FtpIstochnik:
         # nlst иногда отдаёт путь с папкой — оставляем только имя файла
         return [os.path.basename(n) for n in names]
 
+    def _connect(self) -> ftplib.FTP:
+        ftp = ftplib.FTP()
+        ftp.connect(self.host, self.port, timeout=30)
+        ftp.login(self.user, self.password)
+        ftp.set_pasv(True)  # пассивный режим (vsftpd, диапазон 40000-40100)
+        ftp.cwd(self.directory)
+        ftp.voidcmd("TYPE I")  # бинарный режим — иначе SIZE не работает
+        return ftp
+
+    def svezhee_imya(self) -> str:
+        """Имя свежего файла БЕЗ скачивания (для skip-если-уже-применён, этап 24)."""
+        logger.info(f"FTP: смотрю свежий файл в {self.host}:{self.port}/{self.directory}…")
+        ftp = None
+        try:
+            ftp = self._connect()
+            names = self._spisok_xls(ftp)
+            if not names:
+                raise IstochnikError(f"на FTP нет .xls в папке {self.directory}")
+            return _svezhiy_po_imeni(names)
+        except ftplib.all_errors as e:
+            raise IstochnikError(f"ошибка FTP: {e}")
+        finally:
+            if ftp is not None:
+                try:
+                    ftp.quit()
+                except ftplib.all_errors:
+                    pass
+
     def poluchit_svezhiy(self) -> str:
         logger.info(f"FTP: подключаюсь к {self.host}:{self.port} (папка {self.directory})…")
-        ftp = ftplib.FTP()
+        ftp = None
         try:
-            ftp.connect(self.host, self.port, timeout=30)
-            ftp.login(self.user, self.password)
-            ftp.set_pasv(True)  # пассивный режим (vsftpd, диапазон 40000-40100)
-            ftp.cwd(self.directory)
-            ftp.voidcmd("TYPE I")  # бинарный режим — иначе SIZE не работает
-
+            ftp = self._connect()
             names = self._spisok_xls(ftp)
             if not names:
                 raise IstochnikError(f"на FTP нет .xls в папке {self.directory}")
@@ -103,10 +132,11 @@ class FtpIstochnik:
         except ftplib.all_errors as e:
             raise IstochnikError(f"ошибка FTP: {e}")
         finally:
-            try:
-                ftp.quit()
-            except ftplib.all_errors:
-                pass
+            if ftp is not None:
+                try:
+                    ftp.quit()
+                except ftplib.all_errors:
+                    pass
 
 
 def sozdat_ftp_istochnik(cfg) -> FtpIstochnik:

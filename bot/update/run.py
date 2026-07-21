@@ -17,11 +17,15 @@
 прогон того же файла даёт 0 вставок/правок/удалений (всё skip), вектора не трогаются.
 
 Запуск:
-    python -m bot.update.run --ftp           # скачать свежий с FTP Форы и прогнать цикл
-    python -m bot.update.run                 # файл из PRICE_XLS (.env)
-    python -m bot.update.run <путь_к_xls>     # явный файл
-    python -m bot.update.run <путь> --no-embed    # без re-embed (отладка, без денег/времени)
-    python -m bot.update.run <путь> --no-monitor  # без монитора новизны
+    python -m bot.update.run --ftp                # скачать свежий с FTP Форы и прогнать цикл
+    python -m bot.update.run --ftp --skip-known   # + пропуск, если файл уже применён (для cron)
+    python -m bot.update.run                      # файл из PRICE_XLS (.env)
+    python -m bot.update.run <путь_к_xls>          # явный файл
+    python -m bot.update.run <путь> --no-embed     # без re-embed (отладка, без денег/времени)
+    python -m bot.update.run <путь> --no-monitor   # без монитора новизны
+
+Расписание (этап 24): `scripts/update.sh` (POSIX, flock/lock) зовёт этот модуль с
+`--ftp --skip-known`; systemd-timer/cron — в `deploy/`, инструкция — `docs/DEPLOY_UPDATE.md`.
 
 Расписание (вне скоупа этапа 22 — только точка подключения): планировщик/cron зовёт эту
 команду раз в сутки, напр. `0 6 * * *  cd /path/tgbot_py && python -m bot.update.run`.
@@ -32,7 +36,10 @@ import os
 import sys
 import time
 
+import asyncpg
+
 from ..config import load_config
+from ..db import create_pool
 from ..logger import logger
 from . import validate
 from .istochnik import IstochnikError
@@ -42,13 +49,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 _REPORT = os.path.join(_ROOT, "docs", "UPDATE_RUN.md")
 
 
-def _poluchit_fail(cfg) -> str:
-    """Откуда берём файл прайса (этап 17):
-    - `--ftp` → скачать свежий с FTP Форы во временную папку (размер-гейт до загрузки);
-    - иначе локально: аргумент CLI, иначе PRICE_XLS из .env."""
-    if "--ftp" in sys.argv:
-        from .istochnik import sozdat_ftp_istochnik
-        return sozdat_ftp_istochnik(cfg).poluchit_svezhiy()
+def _lokalnyy_put(cfg) -> str:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if args:
         return args[0]
@@ -59,6 +60,37 @@ def _poluchit_fail(cfg) -> str:
     )
 
 
+async def _uzhe_primenen(cfg, imya: str) -> bool:
+    """True, если файл с таким именем уже применён (по price_meta.file_name)."""
+    pool = await create_pool(cfg)
+    try:
+        row = await pool.fetchrow(
+            f"select file_name from {cfg.pg.schema}.price_meta where id = 1"
+        )
+        return bool(row and row["file_name"] == imya)
+    except asyncpg.UndefinedTableError:
+        return False
+    finally:
+        await pool.close()
+
+
+async def _poluchit_ili_propustit(cfg):
+    """Возвращает (путь, None) для обработки, либо (None, имя) — если файл уже применён
+    и задан `--skip-known` (этап 24: не гонять цикл на неизменившемся прайсе)."""
+    skip = "--skip-known" in sys.argv
+    if "--ftp" in sys.argv:
+        from .istochnik import sozdat_ftp_istochnik
+        src = sozdat_ftp_istochnik(cfg)
+        if skip and await _uzhe_primenen(cfg, src.svezhee_imya()):
+            return None, src.svezhee_imya()
+        return src.poluchit_svezhiy(), None
+    path = _lokalnyy_put(cfg)
+    imya = os.path.basename(path)
+    if skip and await _uzhe_primenen(cfg, imya):
+        return None, imya
+    return path, None
+
+
 async def run(path: str | None = None, apply_embed: bool = True,
               monitor: bool = True) -> dict:
     """Полный цикл обновления. Возвращает сводку `sync` (+ novelty). Бросает SystemExit(2)
@@ -66,13 +98,17 @@ async def run(path: str | None = None, apply_embed: bool = True,
     cfg = load_config()
     t0 = time.monotonic()
 
-    # 1) fetch — источник файла (этап 17): FTP `--ftp` или локальный путь
+    # 1) fetch — источник файла (этап 17): FTP `--ftp` или локальный путь;
+    #    `--skip-known` (этап 24) — пропустить, если файл уже применён
     if path is None:
         try:
-            path = _poluchit_fail(cfg)
+            path, propustit = await _poluchit_ili_propustit(cfg)
         except IstochnikError as e:
             logger.error(f"ОТМЕНА: не удалось получить файл прайса — {e}. БД НЕ изменена.")
             raise SystemExit(2)
+        if propustit:
+            logger.info(f"Свежий прайс {propustit} уже применён — цикл пропущен (skip-known).")
+            return {"skipped": propustit}
     logger.info(f"=== Обновление прайса: {os.path.basename(path)} ===")
 
     # 2) validate — ДО любых записей в БД

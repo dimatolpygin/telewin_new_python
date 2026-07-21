@@ -1,0 +1,13 @@
+# Этап 24 — systemd timer: раз в сутки дёргает telewin-update.service.
+# Включение: systemctl enable --now telewin-update.timer  (см. docs/DEPLOY_UPDATE.md).
+[Unit]
+Description=Telewin — ежедневный запуск обновления прайса
+
+[Timer]
+# 06:00 по времени сервера; поправь под окно, когда Фора уже залила файл.
+OnCalendar=*-*-* 06:00:00
+# если сервер был выключен в момент срабатывания — догнать при старте
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -716,11 +716,22 @@ Windows, прод — Ubuntu-сервер.
   проверить прогон, как временно выключить).
 
 **Критерии приёмки** (закрытие → tag `stage-24-done`):
-- [ ] `bash scripts/update.sh` проходит весь цикл (локально через Git Bash / WSL как прокси Ubuntu); один запуск = один апдейт, exit 0
-- [ ] повтор в тот же день (дата прайса не сменилась) → skip без изменений БД; параллельный запуск блокируется лок-файлом
-- [ ] сбой приёма (FTP недоступен / пустышка) → ненулевой exit + `ERROR` в логе; БД цела
-- [ ] `deploy/telewin-update.{service,timer}` + `docs/DEPLOY_UPDATE.md` есть; пути/креды через env, ни одного Windows-пути
-- [ ] ревизия переносимости: `grep` по тракту обновления не находит Windows-специфики (backslash-путей, `chcp`, `.bat`-вызовов)
+- [x] `bash scripts/update.sh` проходит весь цикл (Git Bash как прокси Ubuntu); один запуск = один апдейт, exit 0
+      _(fetch с FTP → validate → 11-кол → upsert → monitor → дата, код возврата 0)_
+- [x] повтор в тот же день (дата прайса не сменилась) → skip без изменений БД; параллельный запуск блокируется лок-файлом
+      _(2-й прогон: «уже применён — цикл пропущен (skip-known)», exit 0; предзанятый `.update.lock.d` → «уже выполняется», exit 0)_
+- [x] сбой приёма (FTP недоступен / пустышка) → ненулевой exit + `ERROR` в логе; БД цела
+      _(FTP host/port недоступен → `ERROR ОТМЕНА … БД НЕ изменена`, код возврата 2; хэш векторов не изменился)_
+- [x] `deploy/telewin-update.{service,timer}` + `docs/DEPLOY_UPDATE.md` есть; пути/креды через env, ни одного Windows-пути
+- [x] ревизия переносимости: `grep` по тракту обновления не находит Windows-специфики (backslash-путей, `chcp`, `.bat`-вызовов)
+      _(чисто; `.venv/Scripts` в `update.sh` — легитимный кросс-платформенный fallback, на Ubuntu берётся `.venv/bin/python`)_
+
+**Как сделано:** `scripts/update.sh` (POSIX entrypoint: venv-детект Ubuntu/Windows, лок атомарным
+`mkdir` — переносимее `flock`, лог в `logs/update.log`, проброс кода возврата) зовёт
+`run --ftp --skip-known`. Skip-если-уже-применён (`run._uzhe_primenen` по `price_meta.file_name` —
+без скачивания). systemd `deploy/telewin-update.{service,timer}` (oneshot + `OnCalendar` раз в сутки,
+пути-плейсхолдеры) + cron-альтернатива; runbook `docs/DEPLOY_UPDATE.md`. Точка алерта — ненулевой код
++ `ERROR` (`OnFailure=`/healthcheck, вне скоупа). Всё переносимо: `os.path`/`pathlib`, креды из `.env`.
 
 ---
 
