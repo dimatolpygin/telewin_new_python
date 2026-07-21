@@ -963,12 +963,25 @@ PGHOST/PGPORT/REDIS_URL переопределены на сервисы compose
 **Цель**: пуш в `master` → GitHub Actions автодеплой → на сервере живы 3 канала + автообновление
 прайса. Docker ставится на сервер с нуля, FTP-приём не ломается.
 
+**РЕШЕНИЯ (согласованы с заказчиком 2026-07-21):**
+- **Эмбеддинги НЕ пересчитываем на проде — переносим готовые векторы из локальной БД.** Локальный
+  `telewin-test-pg` (:5434) уже держит 11864/11864 с `embedding halfvec(3072)` + HNSW. План: `pg_dump`
+  таблицы `telewin_test.products` (DDL + данные вместе с `embedding` + индексы) → восстановить на
+  сервере после `CREATE EXTENSION vector`. **Экономит ~35 мин и кредиты OpenRouter, деплой стартует
+  сразу с полным гибридом (95% золото).** Первичный `import_price`/`embed_index --all` на проде НЕ
+  нужен — только восстановление дампа (`embed_index --index` при необходимости пере-собрать HNSW,
+  без обращений к API).
+- **CI/CD — во вторую очередь.** Сначала РУЧНОЙ деплой по SSH + проверка что всё работает, ЗАТЕМ
+  настройка GitHub Actions (создать `master` + workflow) и выдача списка Secrets заказчику.
+
 **Что делаем** (через `/okdeploy`):
-- подготовка сервера: Docker+compose с нуля (swap уже есть), firewall, SSH deploy-ключ;
+- подготовка сервера: Docker+compose с нуля (swap уже есть), firewall, SSH deploy-ключ; не сломать FTP;
 - клон публичного репо, `.env` на сервере (токены, PG=localhost-контейнер, OpenRouter, FTP —
-  уже на этом же сервере); первичный импорт+эмбеддинги;
-- GitHub Actions: `master` → ssh → `git pull` → `docker compose up -d --build`; список Secrets — человеку;
-- проверка: 3 канала отвечают на проде; таймер автообновления активен.
+  уже на этом же сервере); поднять db+redis;
+- **перенос данных:** `pg_dump` локальной `products` (с векторами) → restore на серверную БД
+  (вместо `import_price` + `embed_index --all`);
+- запустить app (3 канала), проверить прод; **потом** GitHub Actions: `master` → ssh → `git pull` →
+  `docker compose up -d --build`, список Secrets — человеку.
 
 **Критерии приёмки** (закрытие → tag `stage-31-done`):
 - [ ] на сервере `docker compose ps` = app+pg+redis healthy; 3 канала отвечают (живой UAT в TG, VK, MAX)
