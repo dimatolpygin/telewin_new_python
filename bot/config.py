@@ -51,6 +51,10 @@ class Config:
     redis_url: str
     price_xls: str
     ftp: FtpConfig | None
+    # Каналы VK/MAX (этапы 27/28). Пусто → канал не поднимается.
+    vk_token: str
+    vk_group_id: str
+    max_token: str
 
 
 def load_config() -> Config:
@@ -73,6 +77,9 @@ def load_config() -> Config:
         redis_url=os.environ.get("REDIS_URL", "redis://127.0.0.1:6379"),
         price_xls=os.environ.get("PRICE_XLS", ""),
         ftp=_ftp_config(),
+        vk_token=os.environ.get("VK_TOKEN", "").strip(),
+        vk_group_id=os.environ.get("VK_GROUP_ID", "").strip(),
+        max_token=os.environ.get("MAX_TOKEN", "").strip(),
     )
 
 
