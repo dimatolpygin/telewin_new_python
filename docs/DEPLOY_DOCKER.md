@@ -63,12 +63,22 @@ docker compose down -v        # ВНИМАНИЕ: снести и данные (
 ```bash
 docker compose run --rm updater
 ```
-Ставить на расписание — host-таймером (systemd/cron), например ежедневно:
+**Этап 33 — поллинг + условный рестарт бота.** Живой `app` держит индекс поиска в памяти
+(грузится один раз на старте, `bot/bootstrap.py`), поэтому после обновления БД его надо перечитать.
+Голый `docker compose run --rm updater` этого НЕ делает → бот не увидит новый прайс до деплоя.
+Правильный запуск — через host-обёртку `scripts/update_docker.sh`: она гоняет `updater` и, ТОЛЬКО
+если применён новый прайс с реальными изменениями (updater вернул код 10), делает `docker compose
+restart app`. Время заливки прайса клиентом не фиксировано → ставим ПОЛЛИНГОМ (напр. каждые 30 мин):
 ```
-0 4 * * *  cd /opt/telewin/tgbot_py && docker compose run --rm updater >> logs/update.cron.log 2>&1
+*/30 * * * *  cd /opt/telewin/tgbot_py && ./scripts/update_docker.sh
 ```
-(systemd-юниты `deploy/telewin-update.{service,timer}` из этапа 24 — под host-запуск
-`update.sh`; для Docker проще cron с `compose run --rm updater`.)
+Вхолостую дёшево: `--skip-known` сверяет имя свежего файла на FTP без скачивания; нет нового файла →
+код 0 → рестарта (и простоя пуллеров TG/VK/MAX) нет. Рестарт случается только в момент появления
+нового прайса, когда бы клиент его ни залил (сервер в UTC, магазины в Красноярске UTC+7 — при
+поллинге неважно). Лог — `logs/update.cron.log`.
+
+(systemd-юниты `deploy/telewin-update.{service,timer}` из этапа 24 — под host-native `update.sh`
+без Docker; для Docker-прода используем cron + `update_docker.sh`.)
 
 ## Заметки
 

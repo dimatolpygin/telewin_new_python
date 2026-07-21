@@ -178,10 +178,28 @@ def _zapisat_svodku(path, itog, reembed, novye_sem, novye_pg, dt) -> None:
     open(_REPORT, "w", encoding="utf-8").write("".join(lines))
 
 
+# Код возврата для host-cron (этап 33): 10 = применён НОВЫЙ прайс с реальными изменениями
+# каталога (цена/имя/состав) → живому боту нужен рестарт, чтобы перечитать индекс из БД
+# (индекс грузится в память один раз на старте, `bot/bootstrap.py`). 0 = skip-known или
+# ноль изменений (рестарт не нужен). 2 = ошибка источника/валидации (БД не тронута).
+EXIT_PRIMENEN = 10
+
+
+def _nuzhen_restart(itog: dict) -> bool:
+    """Материально ли изменился каталог — так, что боту в памяти нужен свежий индекс."""
+    if not itog or itog.get("skipped"):
+        return False
+    return (itog.get("insert", 0) + itog.get("upd_rename", 0)
+            + itog.get("upd_fact", 0) + itog.get("delete", 0)) > 0
+
+
 def _main() -> None:
     apply_embed = "--no-embed" not in sys.argv
     monitor = "--no-monitor" not in sys.argv
-    asyncio.run(run(apply_embed=apply_embed, monitor=monitor))
+    itog = asyncio.run(run(apply_embed=apply_embed, monitor=monitor))
+    if _nuzhen_restart(itog):
+        logger.info("Каталог изменился → сигнал host-cron: нужен рестарт бота (код 10).")
+        sys.exit(EXIT_PRIMENEN)
 
 
 if __name__ == "__main__":
