@@ -18,15 +18,19 @@ async def main() -> None:
 
     pool = None
     gibrid = None
+    from .ai.agent import ДАТА_ПРАЙСА
+    data_prajsa = ДАТА_ПРАЙСА
     if use_db:
         from .db import create_pool, zagruzit_vse_tovary
         from .search.vector import VectorKanal
         from .search.gibrid import Gibrid
+        from .update.meta import zagruzit_datu
         pool = await create_pool(cfg)
         tovary = await zagruzit_vse_tovary(pool, cfg.pg.schema)
         poisk = Poisk(tovary)
         vk = VectorKanal(pool, cfg.pg.schema)
         gibrid = Gibrid(poisk, vk) if await vk.доступен() else None
+        data_prajsa = await zagruzit_datu(pool, cfg.pg.schema)
     else:
         tovary = load_products_json()
         poisk = Poisk(tovary)
@@ -45,7 +49,7 @@ async def main() -> None:
         if not user_text or user_text.lower() in ("выход", "exit", "quit"):
             break
         res = await run_agent(cfg.openrouter, poisk, history, user_text,
-                              use_podgr=use_podgr, gibrid=gibrid)
+                              use_podgr=use_podgr, gibrid=gibrid, data_prajsa=data_prajsa)
         history = res.new_history[-12:]
         print(f"\nБОТ: {res.answer}")
         print(f"  [поиск: {res.zaprosy_poiska}, найдено: {res.naydeno}]\n")

@@ -30,6 +30,7 @@ import xlrd
 from ..config import load_config
 from ..db import create_pool
 from ..logger import logger
+from . import meta
 
 # Раскладка 11-кол (0-based): 0 артикул 1 штрихкод 2 имя 3 ед 4 произв
 #   5 цена 6 ост.общий 7 ост.Микро 8 ост.Берёз 9 группа 10 подгруппа
@@ -192,11 +193,16 @@ async def sync(path: str, apply_embed: bool = False) -> dict:
                         f"delete from {schema}.products where id = any($1::int[])", to_delete
                     )
 
+            # дата актуальности прайса (этап 20): из имени файла / mtime
+            price_date = meta.data_iz_faila(path)
+            await meta.zapisat(con, schema, price_date, os.path.basename(path))
+
             n = await con.fetchval(f"select count(*) from {schema}.products")
             emb = await con.fetchval(f"select count(embedding) from {schema}.products")
             itog = {"insert": len(to_insert), "upd_fact": len(upd_fact),
                     "upd_rename": len(upd_rename), "delete": len(to_delete),
-                    "skip": skip, "rows": n, "embedding": emb}
+                    "skip": skip, "rows": n, "embedding": emb,
+                    "price_date": price_date.strftime("%d.%m.%Y %H:%M") if price_date else None}
     finally:
         await pool.close()
 
@@ -205,7 +211,8 @@ async def sync(path: str, apply_embed: bool = False) -> dict:
         f"добавлено {itog['insert']}, удалено {itog['delete']}, без изменений {itog['skip']}"
     )
     logger.info(f"ИТОГ: строк {itog['rows']}, с embedding {itog['embedding']} "
-                f"(без вектора {itog['rows'] - itog['embedding']})")
+                f"(без вектора {itog['rows'] - itog['embedding']}); "
+                f"дата прайса {itog['price_date']}")
 
     if apply_embed:
         logger.info("Инкрементальный re-embed (embed_index, только embedding IS NULL)…")

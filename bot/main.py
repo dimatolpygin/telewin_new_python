@@ -33,6 +33,7 @@ async def main() -> None:
     from .db import create_pool, zagruzit_vse_tovary
     from .search.vector import VectorKanal
     from .search.gibrid import Gibrid
+    from .update.meta import zagruzit_datu
     pool = await create_pool(cfg)
     tovary = await zagruzit_vse_tovary(pool, cfg.pg.schema)
     poisk = Poisk(tovary)
@@ -82,8 +83,12 @@ async def main() -> None:
             try:
                 await bot.send_chat_action(chat_id, "typing")
                 history = await sessions.zagruzit(chat_id)
+                # дата актуальности прайса — читаем на каждый запрос (дёшево, одна строка),
+                # чтобы бот подхватывал ежедневное обновление без перезапуска (этап 20)
+                data_prajsa = await zagruzit_datu(pool, cfg.pg.schema)
                 t0 = time.time()
-                res = await run_agent(cfg.openrouter, poisk, history, user_text, gibrid=gibrid)
+                res = await run_agent(cfg.openrouter, poisk, history, user_text,
+                                      gibrid=gibrid, data_prajsa=data_prajsa)
                 await sessions.sohranit(chat_id, res.new_history)
                 await message.answer(res.answer)
                 ms = int((time.time() - t0) * 1000)
