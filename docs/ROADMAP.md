@@ -938,11 +938,25 @@ redis); первичная инициализация схемы/прайса/э
 - автообновление прайса (M4-таймер) — уложить в контейнеризованный вариант (cron/таймер) и проверить.
 
 **Критерии приёмки** (закрытие → tag `stage-30-done`):
-- [ ] `docker compose up` локально поднимает app+pg(pgvector)+redis; бот отвечает в TG (тестовый канал)
-- [ ] схема+прайс инициализируются в чистом volume воспроизводимо (порядок задокументирован, вкл. эмбеддинги)
-- [ ] в контейнере БД поднимается `pgvector` и индекс `halfvec(3072)` (`products_embedding_hnsw`)
-- [ ] `.env.example` покрывает все новые переменные; секреты не зашиты в образ
-- [ ] автообновление прайса (M4) проходит в контейнеризованном варианте (таймер/cron) — цикл ok
+- [x] `docker compose up` локально поднимает app+pg(pgvector)+redis; бот отвечает в TG (тестовый канал)
+      _(живой UAT человеком: `docker compose up` → «Поиск готов: 11864» один раз + 3 канала; TG/VK/MAX ответили из контейнера на «тест»)_
+- [x] схема+прайс инициализируются в чистом volume воспроизводимо (порядок задокументирован, вкл. эмбеддинги)
+      _(initdb → extension+схема; `import_price` → 11864 строк + столбец embedding; runbook `docs/DEPLOY_DOCKER.md` с порядком вкл. платные эмбеддинги)_
+- [x] в контейнере БД поднимается `pgvector` и столбец `halfvec(3072)` (HNSW `products_embedding_hnsw` строит `embed_index`)
+      _(`select extname` → vector; `\d products` → `embedding halfvec(3072)`; HNSW — на шаге эмбеддингов из runbook)_
+- [x] `.env.example` покрывает все новые переменные; секреты не зашиты в образ
+      _(VK_TOKEN/VK_GROUP_ID/MAX_TOKEN/LOG_LEVEL; `.env` в `.dockerignore` — токены через env_file, не в слои образа)_
+- [x] автообновление прайса (M4) проходит в контейнеризованном варианте (таймер/cron) — цикл ok
+      _(`docker compose run --rm updater` → FTP→validate→upsert(11864 без изменений)→монитор, exit 0, 16.7с; host-cron в runbook)_
+
+**Как сделано:** `Dockerfile` (python:3.12-slim, requirements слоем, non-root, CMD `bot.main`).
+`docker-compose.yml`: `db` (pgvector/pgvector:pg16, `docker/initdb/01-extension.sql` → extension+схема
+на чистом volume, healthcheck, том pgdata) + `redis` (том redisdata) + `app` (env_file `.env`,
+PGHOST/PGPORT/REDIS_URL переопределены на сервисы compose, ждёт healthy БД, том `./data`) + `updater`
+(profile `tools`, одноразовый цикл обновления для host-таймера). `import_price` заводит расширение и
+столбец `embedding halfvec(3072)` В КОДЕ (раньше вручную → деплой был невоспроизводим) и починен
+латентный баг: COPY писал NULL в serial `id` (в products.json id нет) → id исключён из COPY. Runbook
+`docs/DEPLOY_DOCKER.md`.
 
 ## Этап 31 — Деплой на 87.58.210.46 + CI/CD (через `okdeploy`)
 
