@@ -874,10 +874,25 @@ chat_key, user_text, typing_cb=)` — замок на `(канал, чат)`, д
 - welcome/сброс аналогично; ретраи и переподключение при таймауте/ошибке.
 
 **Критерии приёмки** (закрытие → tag `stage-28-done`):
-- [ ] запрос MAX-боту → ответ (живой UAT человеком)
-- [ ] токен передаётся заголовком `Authorization` (не query) — подтверждено рабочим ответом API
-- [ ] сессия MAX изолирована (`…:max:<chat_id>`)
-- [ ] long polling переподключается при таймауте/ошибке; лог несёт request-id и канал `max`
+- [x] запрос MAX-боту → ответ (живой UAT человеком)
+      _(UAT 23:44–23:45: «есть сальники?»→уточнение, «для крана»→таблица 7 размеров с ценами 6,50–7,00 ₽ и остатками; контекст диалога держится)_
+- [x] токен передаётся заголовком `Authorization` (не query) — подтверждено рабочим ответом API
+      _(GET /me → 200, бот «Домашний мастепр» id420320118936_bot user_id 364106946; `_MaxApi` шлёт `Authorization: <токен>`)_
+- [x] сессия MAX изолирована (`…:max:<chat_id>`)
+      _(core → `Sessions` с channel="max"; ключ `telewin:dialog:max:<chat_id>`)_
+- [x] long polling переподключается при таймауте/ошибке; лог несёт request-id и канал `max`
+      _(TransportError/Timeout → пауза 1с; HTTPStatusError → пауза 3с; UAT-лог `[max c5332c66]`/`[max f23d5b2b]` цепочка под rid)_
+
+**Как сделано:** `bot/channels/max.py` — raw httpx Long Polling к `platform-api2.max.ru` (не старый
+`botapi`). Токен заголовком `Authorization` (query устарел). `GET /updates?marker=&timeout=` →
+`{updates, marker}`; marker-курсор; слив стартового marker (после рестарта не переотвечаем на старые).
+`message_created`/`bot_started` → `yadro.obrabotat("max", chat_id, …)` → `POST /messages?chat_id=`.
+**TLS:** сервер под сертификатом Минцифры — bundle certifi ⊕ Минцифры (`certs/russian_trusted_{root,
+sub}_ca.cer`, публичные CA в репо). Каждое сообщение — своя задача (свой request-id); очередь на
+(канал, chat) держит ядро. Standalone: `python -m bot.channels.max`.
+
+_Косметика на будущее (не в скоупе):_ ответы содержат markdown (таблицы/`**жирный**`) — TG рендерит
+не всё, VK/MAX показывают сырьём. Форматирование под каналы — отдельная задача.
 
 ## Этап 29 — Оркестрация трёх каналов в одном процессе
 
