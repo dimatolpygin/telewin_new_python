@@ -3,9 +3,10 @@
 Рабочий Python-порт бота (@NikaAi1Bot) — основной артефакт стенда `telewin_tests`.
 Поиск = лексика (словарь+атрибуты+фаззи) ⊕ вектор (pgvector) через RRF.
 
-**Отдельный изолированный git-репо** (ветка `dev`, БЕЗ remote — пуш некуда, только локальные
-коммиты). Ведётся по okplan: `docs/STATUS.md` (снимок, читать первым), `docs/ROADMAP.md`
-(критерии), теги `stage-N-done`.
+**Отдельный git-репо**, remote = **публичный** `github.com/dimatolpygin/telewin_new_python` (с этапа 25;
+ветка `dev` + теги запушены). Push требует интерактивной GitHub-авторизации через Git Credential
+Manager (кэш-токена нет) — при `git push` откроется браузер. Ведётся по okplan: `docs/STATUS.md`
+(снимок, читать первым), `docs/ROADMAP.md` (критерии), теги `stage-N-done`.
 
 - **Milestone 1 (этапы 0–10) закрыт** — гибридный поиск работает.
 - **Milestone 2 «Апгрейд качества поиска» (этапы 11–16) — ЗАВЕРШЁН** (теги `stage-11..16-done`):
@@ -19,8 +20,12 @@
 - **Milestone 4 «Автообновление из FTP по расписанию» (этапы 17, 18, 24) — ЗАВЕРШЁН**: 17 (FTP-приём
   `istochnik.py`), 18 (автораскладка 8↔11 `parser.py`), 24 (планировщик `scripts/update.sh` +
   `deploy/*.{service,timer}` + runbook `docs/DEPLOY_UPDATE.md`). Цепочка «файл на FTP → подхватился
-  сам → бот по свежему каталогу» замкнута в коде, переносимо под Ubuntu. **НО на сервер ничего НЕ
-  переезжало** — весь стенд (бот+БД+Redis+воркер) крутится ЛОКАЛЬНО; деплой — отдельная будущая веха.
+  сам → бот по свежему каталогу» замкнута в коде, переносимо под Ubuntu.
+- **Milestone 5 «Продакшн: мультиканал + деплой» (этапы 25–31) — В РАБОТЕ**: 25 (каналонезависимое
+  ядро `bot/core.py` + публичный репо), 26 (логи «каждая щель» + request-id), 27 (канал VK), 28 (канал
+  MAX), 29 (оркестрация 3 каналов), 30 (Docker-стек) — **закрыты** (теги `stage-25..30-done`). 31
+  (деплой на `87.58.210.46` + CI/CD) — 🚧 план согласован, деплой ещё НЕ запускали. Стенд по-прежнему
+  крутится ЛОКАЛЬНО; на сервер не переезжал (там пока только FTP-приём).
 
 ## Неочевидное (без этого сломаешь или будешь искать час)
 
@@ -135,6 +140,41 @@
   8-кол, это осознанно ловить, не пугаться. `validate.py` ослаблен до ≥8 колонок (раскладку решает parser).
 - **Прод-развёртывание НЕ сделано.** `deploy/*.{service,timer}` — с путями-плейсхолдерами
   (`/opt/telewin/tgbot_py`), их править под сервер; запуск на Ubuntu — по `docs/DEPLOY_UPDATE.md`.
+
+## Неочевидное — мультиканал/Docker/деплой (Milestone 5)
+
+- **Ядро каналонезависимо.** `bot/core.py::Yadro.obrabotat(channel, chat_key, user_text, typing_cb=)`
+  — вся доменная логика (замок на `(канал, чат)`, дата прайса, `run_agent`, сессия). Адаптеры
+  `bot/channels/{telegram,vk,max}.py` — тонкий транспорт. `bot/main.py` = `sozdat_yadro`
+  (`bot/bootstrap.py`, индекс поиска ОДИН раз) + `asyncio.gather` под супервизором `_supervise`
+  (падение канала логируется+перезапуск, соседи живы). **Добавить канал = адаптер + строка в `KANALY`.**
+- **Сессии разведены по каналам:** ключ Redis `telewin:dialog:{канал}:{chat}` (`bot/session.py`) —
+  VK peer_id и TG chat_id с одним числом НЕ схлопываются. **Канал выключается пустым токеном** в `.env`
+  (адаптер возвращается сразу): `BOT_TOKEN`/`VK_TOKEN`+`VK_GROUP_ID`/`MAX_TOKEN`.
+- **request-id — через `contextvars` в `bot/logger.py`.** Адаптер оборачивает обработку в
+  `with nachat_zapros(CHANNEL):` — фильтр подмешивает `[канал rid]` в КАЖДУЮ строку без проброса
+  параметром. `LOG_LEVEL=debug` добавляет промпт/ответ ИИ (на `info` — нет). Помощники
+  `log_vhodyashchee/tool_call/vyzov_ii/ishodyashchee/oshibka`.
+- **MAX — самое неочевидное (сожжёшь час):** база **`https://platform-api2.max.ru`** (не старый
+  `botapi`/`platform-api`), токен **заголовком `Authorization: <токен>`** (query устарел). **TLS под
+  сертификатом Минцифры** — стандартного certifi мало, `bot/channels/max.py::_ssl_context` строит
+  bundle certifi ⊕ `certs/russian_trusted_{root,sub}_ca.cer` (публичные CA в репо — не удалять!).
+  Long Poll: `GET /updates?marker=&timeout=` → `{updates, marker}`; текст в `message.body.text`,
+  chat_id в `message.recipient.chat_id`. VK — raw Bots Long Poll (без `vkbottle`), `failed:1/2/3`.
+- **`import_price` теперь самодостаточен** (этап 30): заводит `create extension vector` + столбец
+  `embedding halfvec(3072)` В КОДЕ (раньше вручную через psql → деплой был невоспроизводим). Починен
+  латентный баг: COPY писал NULL в `serial id` (в `products.json` поля `id` нет) → `id` исключён из
+  COPY, serial генерит сам. На чистом volume всплывало, на обжитой БД маскировалось.
+- **Docker-стек** (`docker-compose.yml`): `db` (pgvector/pgvector:pg16, initdb `docker/initdb/*.sql`
+  → extension+схема), `redis`, `app` (`env_file .env`, PGHOST/REDIS_URL переопределены на сервисы
+  compose), `updater` (profile `tools`, одноразовый цикл для host-cron). Init-порядок и запуск —
+  `docs/DEPLOY_DOCKER.md`. Два инстанса на одном `BOT_TOKEN` → `TelegramConflictError` (Telegram
+  отдаёт getUpdates одному) — держать что-то одно.
+- **Деплой (этап 31, не выполнен): векторы ПЕРЕНОСИМ, не пересчитываем.** Локальный `telewin-test-pg`
+  (:5434) держит 11864/11864 с `embedding halfvec(3072)`+HNSW → `pg_dump` таблицы `products` (с
+  векторами+индексами) → restore на сервер после `CREATE EXTENSION vector`. Экономит ~35 мин и кредиты
+  OpenRouter; `import_price`/`embed_index --all` на проде НЕ нужны. CI/CD — во вторую очередь (сначала
+  ручной SSH-деплой). Детали — `docs/ROADMAP.md`/`STATUS.md` этап 31.
 
 ## Прочее
 
