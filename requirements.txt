@@ -7,6 +7,10 @@ redis>=5.0
 
 # ИИ / HTTP
 httpx>=0.27
+# CA-корни для TLS: MAX (platform-api2.max.ru) требует сертификат Минцифры поверх
+# стандартных (см. bot/channels/max.py + certs/). certifi ставится с httpx, но
+# фиксируем явно — на нём строим общий bundle.
+certifi>=2024.0
 
 # Поиск
 snowballstemmer>=2.2
