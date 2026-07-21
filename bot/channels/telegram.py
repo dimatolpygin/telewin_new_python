@@ -11,7 +11,8 @@ from aiogram.types import Message
 
 from ..config import Config
 from ..core import Yadro
-from ..logger import logger, log_deystvie_polzovatelya, log_otvet_bota
+from ..logger import (logger, nachat_zapros, log_vhodyashchee,
+                      log_ishodyashchee, log_oshibka)
 from ..texts import WELCOME, RESET_OK, ERROR_RETRY
 
 CHANNEL = "telegram"
@@ -23,20 +24,23 @@ async def run_telegram(cfg: Config, yadro: Yadro) -> None:
     bot = Bot(cfg.bot_token)
     dp = Dispatcher()
 
-    # Лог каждого действия пользователя (требование CLAUDE.md)
+    # Лог каждого действия пользователя (требование CLAUDE.md). Контекст запроса
+    # (канал + новый request-id) открываем здесь — он сшивает всю цепочку логов
+    # (вход → tool-call → вызов ИИ → выход) одним id для этого сообщения.
     @dp.message()
     async def log_and_route(message: Message) -> None:
-        u = message.from_user
-        text = message.text or "(не текст)"
-        log_deystvie_polzovatelya(u.username if u else None, u.id if u else None,
-                                  u.first_name if u else None, text)
-        await _route(message)
+        with nachat_zapros(CHANNEL):
+            u = message.from_user
+            text = message.text or "(не текст)"
+            log_vhodyashchee(u.username if u else None, u.id if u else None,
+                             u.first_name if u else None, text)
+            await _route(message)
 
     async def _route(message: Message) -> None:
         text = message.text or ""
         if text.startswith("/start"):
             await message.answer(WELCOME)
-            log_otvet_bota(message.from_user.username if message.from_user else None, "приветствие")
+            log_ishodyashchee(message.from_user.username if message.from_user else None, "приветствие")
             return
         if text.startswith("/reset"):
             await yadro.sbros(CHANNEL, message.chat.id)
@@ -57,12 +61,10 @@ async def run_telegram(cfg: Config, yadro: Yadro) -> None:
             res = await yadro.obrabotat(CHANNEL, chat_id, user_text, typing_cb=typing)
             await message.answer(res.answer)
             ms = int((time.time() - t0) * 1000)
-            logger.info(
-                f"🤖 [{CHANNEL}] → @{uname or '—'}: ответ за {ms}мс "
-                f"[поиск: {res.zaprosy_poiska}, найдено: {res.naydeno}]"
-            )
-        except Exception as e:
-            logger.error(f"[{CHANNEL}] Ошибка обработки сообщения: {e}")
+            log_ishodyashchee(uname, res.answer, ms=ms,
+                              meta=f"[поиск: {res.zaprosy_poiska}, найдено: {res.naydeno}]")
+        except Exception:
+            log_oshibka("Ошибка обработки сообщения", zapros=user_text)
             await message.answer(ERROR_RETRY)
 
     me = await bot.get_me()

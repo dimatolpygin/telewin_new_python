@@ -3,10 +3,12 @@
 Порт openrouter.ts на httpx.
 """
 import asyncio
+import time
 
 import httpx
 
 from ..config import OpenRouterConfig
+from ..logger import log_vyzov_ii
 
 
 class OpenRouterError(Exception):
@@ -41,9 +43,11 @@ async def chat(cfg: OpenRouterConfig, messages: list[dict], tools: list[dict] | 
     async with httpx.AsyncClient(timeout=60.0) as client:
         for popytka in range(1, MAX + 1):
             try:
+                t0 = time.perf_counter()
                 res = await client.post(
                     f"{cfg.base_url}/chat/completions", json=body, headers=headers
                 )
+                latency_ms = int((time.perf_counter() - t0) * 1000)
                 text = res.text
                 if res.status_code == 429 or res.status_code >= 500:
                     raise OpenRouterError(
@@ -55,6 +59,10 @@ async def chat(cfg: OpenRouterConfig, messages: list[dict], tools: list[dict] | 
                 msg = (data.get("choices") or [{}])[0].get("message")
                 if not msg:
                     raise OpenRouterError(f"OpenRouter: пустой ответ {text[:300]}", retry=True)
+                # Лог вызова ИИ: модель, латентность, токены (usage при наличии).
+                # Промпт/ответ — только в debug (см. logger.DEBUG_LOGS).
+                log_vyzov_ii(cfg.model, latency_ms, data.get("usage"),
+                             messages=messages, otvet=msg)
                 return {"content": msg.get("content"), "tool_calls": msg.get("tool_calls")}
             except OpenRouterError as e:
                 last = e

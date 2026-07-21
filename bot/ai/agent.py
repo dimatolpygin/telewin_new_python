@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from ..config import OpenRouterConfig
 from ..search.search import Poisk
-from ..logger import logger
+from ..logger import logger, log_tool_call
 from .openrouter import chat
 
 # Fallback-дата, если метаданных прайса ещё нет в БД (этап 20 подставляет реальную
@@ -158,6 +158,9 @@ async def run_agent(
                 else:
                     rezultaty, kanal = poisk.iskat(query, top=top, use_podgr=use_podgr)
                 poslednee_naydeno = len(rezultaty)
+                log_tool_call("search_products",
+                              {"query": query, "assortiment": assort, "канал": kanal},
+                              poslednee_naydeno)
                 # честная пометка бренда (этап 15): покупатель назвал бренд, а ни одна
                 # найденная позиция ему не соответствует → это аналоги, не искомый бренд.
                 brend_disp, brend_match = poisk.brend_iz_zaprosa(query)
