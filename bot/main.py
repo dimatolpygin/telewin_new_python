@@ -19,6 +19,9 @@ from .channels.telegram import run_telegram
 from .channels.vk import run_vk
 from .channels.max import run_max
 
+# Версия сборки — виден в стартовом логе (маркер успешного автодеплоя, этап 31).
+SBORKA = "2026-07-22.1"
+
 # (имя, функция-запуска) — единый список каналов. Добавить канал = одна строка.
 KANALY = [("telegram", run_telegram), ("vk", run_vk), ("max", run_max)]
 
@@ -59,6 +62,7 @@ def _ustanovit_signaly(stop: asyncio.Event) -> None:
 
 async def main() -> None:
     cfg = load_config()
+    logger.info("telewin-bot: старт процесса · сборка %s", SBORKA)
     yadro, pool, sessions = await sozdat_yadro(cfg)
 
     tasks = [asyncio.create_task(_supervise(name, fn, cfg, yadro), name=name)
