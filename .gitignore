@@ -14,3 +14,4 @@ logs/
 # крупные данные (генерируются export_price.py)
 data/products.json
 *.log
+.secrets/
