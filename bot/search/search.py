@@ -91,14 +91,24 @@ class Poisk:
         for row in self.rows:
             self.podgr_stems.setdefault(row["t"].get("podgruppa", ""), row["стемы_подгр"])
 
-        # индекс канала производителя: производитель -> его стемы и его строки
+        # бренды (этап 15): страны/заглушки в поле proizvoditel — НЕ бренд; народные
+        # алиасы (кириллица) известных марок инструмента для честной пометки/буста.
+        brendy = json.load(open(os.path.join(data_dir, "brendy.json"), encoding="utf-8"))
+        self.ne_brend = {s.strip().lower() for s in brendy.get("не_бренд", [])}
+        self.narodnye_aliasy = {k.lower(): v for k, v in brendy.get("народные_алиасы", {}).items()}
+
+        # индекс канала производителя: производитель -> его стемы и его строки.
+        # Страны/заглушки («Россия»/«Китай»/«Без бренда»/«ноль») исключаем из стем-индекса —
+        # иначе «россия» уводит канал производителя в 4411 товаров (баг этапа 15).
         self.proizv_stems = {}
         self.po_proizv = collections.defaultdict(list)
         for row in self.rows:
             pr = row["t"].get("proizvoditel", "")
             self.po_proizv[pr].append(row)
-            if pr not in self.proizv_stems:
+            if pr not in self.proizv_stems and pr.strip().lower() not in self.ne_brend:
                 self.proizv_stems[pr] = stems(pr)
+        # множество всех производителей в нижнем регистре (для сопоставления бренда из запроса)
+        self._proizv_low = {r["t"].get("proizvoditel", "").lower() for r in self.rows}
 
         # варианты названия семейства: само имя, канон, каждый синоним
         self.varianty = {}
@@ -246,7 +256,8 @@ class Poisk:
 
     def proizvoditeli_po_zaprosu(self, qs: set):
         """Производители, чьё имя ПОЛНОСТЬЮ названо в запросе («что есть от бибера»).
-        Полное покрытие + токен ≥3 симв — чтобы не ловить короткие/общие слова."""
+        Полное покрытие + токен ≥3 симв — чтобы не ловить короткие/общие слова.
+        Страны/заглушки уже исключены из `proizv_stems` (этап 15)."""
         res = []
         for pr, ss in self.proizv_stems.items():
             if not ss or not pr:
@@ -254,6 +265,26 @@ class Poisk:
             if ss <= qs and any(len(w) >= 3 for w in ss):
                 res.append(pr)
         return res
+
+    def brend_iz_zaprosa(self, q: str, qs: set | None = None):
+        """Бренд, названный в запросе (этап 15). Возвращает (отображаемое_имя | None,
+        множество производителей-в-нижнем-регистре, совпавших с этим брендом).
+        Пустое множество при непустом имени = бренд назван, но такого в прайсе нет →
+        основание для честной пометки «именно этого бренда нет, есть аналоги»."""
+        if qs is None:
+            qs = stems(q)
+        ql = q.lower()
+        # 1) народные марки инструмента по алиасу (кириллица/латиница), по границе слова —
+        #    в прайсе бренд хранится латиницей (MAKITA), стем-канал кириллицу не ловит.
+        for alias, disp in self.narodnye_aliasy.items():
+            if re.search(r"(?<![а-яёa-z])" + re.escape(alias) + r"(?![а-яёa-z])", ql):
+                dl = disp.lower()
+                return disp, {pr for pr in self._proizv_low if dl in pr}
+        # 2) реальный производитель прайса, полностью названный в запросе (без заглушек)
+        prs = self.proizvoditeli_po_zaprosu(qs)
+        if prs:
+            return prs[0], {prs[0].lower()}
+        return None, set()
 
     def iskat(self, q: str, top: int = 5, use_podgr: bool = False, use_slovar: bool = True,
               use_proizv: bool = True):
@@ -270,6 +301,9 @@ class Poisk:
         zapros_materialy = {self.material_stems[s] for s in qs if s in self.material_stems}
         # головное vs зависимое слово (этап 9): «муфта для трубы» → head=муфта
         head_st, dep_st = self.head_dep(q)
+        # бренд, названный в запросе (этап 15): буст его товаров внутри семейства
+        # («болгарка вихрь» → УШМ Вихрь, а не Ресанта). brend_match — производители-в-нижнем.
+        _brend_disp, brend_match = self.brend_iz_zaprosa(q, qs)
         self._last_top = 0.0  # диагностика: балл лучшего кандидата (для калибровки порога)
 
         # прямой канал: штрихкод (EAN, 8-13 цифр) — самый специфичный
@@ -299,6 +333,16 @@ class Poisk:
             if kand and kand[0][0] >= 0.6:
                 porog = kand[0][0] - 0.35
                 semi = [f for s, f in kand if s >= porog][:4]
+                # при названном бренде семейство дробится по модели («УШМ-125/» vs
+                # «УШМ-180/…»), и товар бренда может не попасть в топ-4 равнобалльных
+                # семейств. Целево дотягиваем семейства-кандидаты (в пределах porog),
+                # где реально есть товар бренда, — чтобы буст его достал (этап 15).
+                if brend_match:
+                    for s, f in kand:
+                        if s >= porog and f not in semi and any(
+                            r["t"].get("proizvoditel", "").lower() in brend_match
+                            for r in self.po_sem.get(f, [])):
+                            semi.append(f)
             # фаззи-канал опечаток: OOV-слово запроса -> семейство по сходству.
             # Fusion: добавляет семейство-кандидата, не заменяя лексику; жёсткие
             # каналы (штрихкод/артикул) уже отработали выше.
@@ -386,6 +430,11 @@ class Poisk:
                 for tok in name_tokens:
                     if tok in imya_low:
                         s += 4.0
+            # бренд из запроса (этап 15): товар нужного бренда внутри семейства — буст.
+            # «болгарка вихрь» → УШМ Вихрь поверх УШМ Ресанта. Не короткозамыкает: работает
+            # только внутри уже отобранных семейств-кандидатов, как тай-брейк подтипа.
+            if brend_match and row["t"].get("proizvoditel", "").lower() in brend_match:
+                s += 3.0
             # пересечение слов запроса с именем товара
             s += 1.2 * len(qs & row["стемы"])
             # тай-брейк: имя семейства полностью названо запросом, без лишних слов
