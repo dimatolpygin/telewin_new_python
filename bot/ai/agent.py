@@ -83,7 +83,7 @@ TOOLS = [{
         "description": (
             "Поиск товара в прайсе магазина по ключевым словам. Передавай тип товара и характеристики "
             "нормальными словами и цифрами, например: «гвозди строительные 100», «саморез гипсокартон дерево 3.5 45», "
-            "«смеситель кухня», «лампа E27 60вт». Возвращает до 5 наиболее подходящих позиций с ценой и остатками."
+            "«смеситель кухня», «лампа E27 60вт». Возвращает наиболее подходящие позиции с ценой и остатками."
         ),
         "parameters": {
             "type": "object",
@@ -91,6 +91,14 @@ TOOLS = [{
                 "query": {
                     "type": "string",
                     "description": "Ключевые слова товара для поиска (тип + размер/характеристики).",
+                },
+                "assortiment": {
+                    "type": "boolean",
+                    "description": (
+                        "Поставь true, если покупатель просит показать ВЕСЬ выбор/список вариантов "
+                        "(«какие есть?», «покажи все», «какие варианты», «весь ассортимент», «что есть из…») — "
+                        "вернётся до 15 позиций. По умолчанию false — точечный запрос, вернётся до 8."
+                    ),
                 },
             },
             "required": ["query"],
@@ -129,15 +137,20 @@ async def run_agent(
             messages.append({"role": "assistant", "content": res.get("content") or "",
                              "tool_calls": res["tool_calls"]})
             for tc in res["tool_calls"]:
+                assort = False
                 try:
-                    query = json.loads(tc["function"]["arguments"]).get("query", "")
+                    args = json.loads(tc["function"]["arguments"])
+                    query = args.get("query", "")
+                    assort = bool(args.get("assortiment", False))
                 except (json.JSONDecodeError, KeyError, TypeError):
                     query = ""
                 zaprosy_poiska.append(query)
+                # адаптивный лимит: точечный запрос — до 8, «какие есть/весь выбор» — до 15
+                top = 15 if assort else 8
                 if gibrid is not None:
-                    rezultaty, kanal = await gibrid.iskat(query, use_podgr=use_podgr)
+                    rezultaty, kanal = await gibrid.iskat(query, top=top, use_podgr=use_podgr)
                 else:
-                    rezultaty, kanal = poisk.iskat(query, use_podgr=use_podgr)
+                    rezultaty, kanal = poisk.iskat(query, top=top, use_podgr=use_podgr)
                 poslednee_naydeno = len(rezultaty)
                 # честная пометка бренда (этап 15): покупатель назвал бренд, а ни одна
                 # найденная позиция ему не соответствует → это аналоги, не искомый бренд.
