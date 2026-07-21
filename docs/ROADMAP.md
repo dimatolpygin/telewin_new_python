@@ -845,10 +845,22 @@ chat_key, user_text, typing_cb=)` — замок на `(канал, чат)`, д
   падения процесса.
 
 **Критерии приёмки** (закрытие → tag `stage-27-done`):
-- [ ] запрос в ВК-сообществе → ответ бота с ценой/наличием (живой UAT человеком)
-- [ ] сессия ВК изолирована (ключ `…:vk:<peer_id>`), не пересекается с TG
-- [ ] longpoll переподключается при обрыве (`failed:1/2/3`) без падения процесса
-- [ ] лог ВК-запроса несёт request-id и канал `vk`
+- [x] запрос в ВК-сообществе → ответ бота с ценой/наличием (живой UAT человеком)
+      _(UAT 23:29–23:30: «есть ли пихтовое масло?» → бот выдал 2 позиции с ценами 251/438 руб и остатками по точкам; связка groups.getById→dmberez, getLongPollServer, a_check проверена живьём)_
+- [x] сессия ВК изолирована (ключ `…:vk:<peer_id>`), не пересекается с TG
+      _(core → `Sessions` с channel="vk"; ключ `telewin:dialog:vk:<peer_id>`)_
+- [x] longpoll переподключается при обрыве (`failed:1/2/3`) без падения процесса
+      _(failed:1 → сдвиг ts; failed:2/3 → перезапрос key(+ts); TransportError/Timeout → пауза 1с + continue)_
+- [x] лог ВК-запроса несёт request-id и канал `vk`
+      _(UAT-лог: `[vk a27149e1]`/`[vk 0722f512]` — цепочка 👤→🧠→🔧→🧠→🤖 под одним rid на запрос)_
+
+**Как сделано:** `bot/channels/vk.py` — raw httpx Bots Long Poll (без `vkbottle`, чтобы чисто встать
+в `asyncio.gather` этапа 29). `groups.getLongPollServer` → цикл `act=a_check`; `message_new` →
+`yadro.obrabotat("vk", peer_id, …)` → `messages.send` (random_id). Welcome по «начать»/payload start,
+сброс по «сброс». Устойчивость: `failed:1` сдвигает ts, `failed:2/3` перезапрашивает key(+ts), сетевые
+ошибки — пауза+переподключение. Каждое сообщение — своя задача (свой request-id); очередь на
+(канал, peer) держит ядро. `bot/bootstrap.py::sozdat_yadro` собирает поиск/ядро один раз (общее для
+всех каналов); `python -m bot.channels.vk` — standalone для UAT.
 
 ## Этап 28 — Канал MAX (Long Polling, Authorization-заголовок)
 
