@@ -984,8 +984,27 @@ PGHOST/PGPORT/REDIS_URL переопределены на сервисы compose
   `docker compose up -d --build`, список Secrets — человеку.
 
 **Критерии приёмки** (закрытие → tag `stage-31-done`):
-- [ ] на сервере `docker compose ps` = app+pg+redis healthy; 3 канала отвечают (живой UAT в TG, VK, MAX)
-- [ ] Docker установлен на `87.58.210.46` с нуля; FTP-приём прайса продолжает работать (сосуществуют)
-- [ ] пуш в `master` → Actions деплоит без ручных шагов на сервере; логи деплоя зелёные
-- [ ] сквозная проверка автообновления на проде: файл на FTP → подхватился сам → бот по свежему каталогу
-- [ ] секреты только в GitHub Secrets / `.env` на сервере (не в репо); список Secrets передан человеку
+- [x] на сервере `docker compose ps` = app+pg+redis healthy; 3 канала отвечают (живой UAT в TG, VK, MAX)
+      _(«Поиск готов: 11864» один раз + telegram/vk/max подключены; живой UAT человеком — 3 канала ответили ценой/наличием)_
+- [x] Docker установлен на `87.58.210.46` с нуля; FTP-приём прайса продолжает работать (сосуществуют)
+      _(Docker 29.6.2 + Compose v5.3.1 с нуля; `vsftpd` active на :21 после установки — не задет; compose хост-порты не публикует)_
+- [x] пуш в `master` → Actions деплоит без ручных шагов на сервере; логи деплоя зелёные
+      _(тест-коммит `4c859c5` → Actions → сервер на `4c859c5`, маркер `сборка 2026-07-22.1` в логах, векторы целы через пересборку)_
+- [x] сквозная проверка автообновления на проде: файл на FTP → подхватился сам → бот по свежему каталогу
+      _(`docker compose run --rm updater` из контейнера достаёт FTP (hairpin NAT ok) → validate→upsert→monitor, exit 0, 11864/11864; host-cron 04:00)_
+- [x] секреты только в GitHub Secrets / `.env` на сервере (не в репо); список Secrets передан человеку
+      _(SSH_PRIVATE_KEY/SERVER_* в GitHub Secrets; `.env` на сервере chmod 600, untracked; PG-пароль свежий; репо чист)_
+
+**Как сделано:** ручной SSH-деплой через `okdeploy` (`okdeploy`-навык): ed25519 deploy-ключ →
+`authorized_keys`; Docker+compose установлены с нуля (get.docker.com), `vsftpd` не тронут; репо
+склонирован в `/opt/telewin/tgbot_py`; `.env` залит через scp (свежий PG-пароль, токены TG/VK/MAX/
+OpenRouter/FTP). **Перенос векторов вместо пересчёта:** `pg_dump -Fc -t telewin_test.products`
+(154 МБ, 11864 строки с `embedding halfvec(3072)` + все 4 индекса вкл. HNSW) → `pg_restore` на сервер
+после `CREATE EXTENSION vector` (initdb) — прод стартовал сразу с гибридом 95%, `import_price`/
+`embed_index --all` НЕ запускались (0 обращений к OpenRouter, ~35 мин и кредиты сэкономлены). Локальный
+поллер остановлен (конфликт `getUpdates` по общему `BOT_TOKEN`). **CI/CD:** `.github/workflows/deploy.yml`
+(appleboy/ssh-action, push `master` → `git reset --hard origin/master` + `docker compose up -d --build` +
+`image prune`; том `pgdata` с векторами переживает деплой, untracked `.env` не затрагивается); ветка
+`master` создана, сервер переведён на неё; пайплайн проверен тест-коммитом (зелёный). **Фикс деплоя:**
+`chown 1000:1000 docs logs` — контейнер под non-root `app` не мог писать отчёты монитора в смонтированные
+root-owned каталоги. Host-cron `0 4 * * *` — ежедневное автообновление прайса.
