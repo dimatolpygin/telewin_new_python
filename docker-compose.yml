@@ -1,0 +1,66 @@
+# Стек: app (3 канала) + postgres-pgvector + redis (этап 30).
+# Секреты/токены — из .env (env_file). Хост БД/Redis переопределяются на имена
+# сервисов compose (внутренняя сеть), поэтому localhost-значения из .env не мешают.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${PGUSER:-postgres}
+      POSTGRES_PASSWORD: ${PGPASSWORD:-postgres}
+      POSTGRES_DB: ${PGDATABASE:-mydb}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-postgres} -d ${PGDATABASE:-mydb}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      # переопределяем на сервисы compose (в .env стоят localhost:5434 для локали)
+      PGHOST: db
+      PGPORT: "5432"
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./data:/app/data          # products.json + словари (генерируются вне образа)
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  # Одноразовый цикл обновления прайса из FTP (этап 24 в контейнере). Не поднимается
+  # с `up` (profile tools). Запуск по расписанию — host cron/systemd:
+  #   docker compose run --rm updater
+  updater:
+    build: .
+    profiles: ["tools"]
+    env_file: .env
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./docs:/app/docs
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "bot.update.run", "--ftp", "--skip-known"]
+
+volumes:
+  pgdata:
+  redisdata:

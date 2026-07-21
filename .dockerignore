@@ -1,0 +1,24 @@
+# venv/кеши
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# секреты и логи (env приходит через env_file/environment, не в образ)
+.env
+*.log
+logs/
+.update.lock.d/
+
+# git и мусор
+.git/
+.gitignore
+.gitattributes
+
+# крупные генерируемые данные (products.json монтируется томом ./data, не в образ)
+data/products.json
+samples/
+
+# документация (в образе не нужна)
+docs/
+bench/

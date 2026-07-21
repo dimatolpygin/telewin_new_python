@@ -23,6 +23,10 @@ async def main() -> None:
     pool = await create_pool(cfg)
     try:
         async with pool.acquire() as con:
+            # pgvector + столбец эмбеддингов заводим в коде (воспроизводимый init в
+            # чистом volume, этап 30): раньше делались вручную через psql/pg-meta.
+            # embedding halfvec(3072) — NULL до расчёта (bot.embed_index); HNSW строит он же.
+            await con.execute("create extension if not exists vector")
             await con.execute(f"create schema if not exists {schema}")
             await con.execute(f"drop table if exists {schema}.products")
             await con.execute(f"""
@@ -39,14 +43,18 @@ async def main() -> None:
                     ostatok_berez  numeric,
                     semeystvo      text,
                     gruppa         text,
-                    podgruppa      text
+                    podgruppa      text,
+                    embedding      halfvec(3072)
                 )
             """)
 
-            # пакетная вставка через copy_records_to_table (быстро и без склейки SQL)
-            records = [tuple(t.get(c) for c in COLS) for t in tovary]
+            # пакетная вставка через copy_records_to_table (быстро и без склейки SQL).
+            # id НЕ пишем — serial генерит сам (в products.json поля id нет; COPY с
+            # явным NULL в serial падал на чистом volume — этап 30).
+            copy_cols = [c for c in COLS if c != "id"]
+            records = [tuple(t.get(c) for c in copy_cols) for t in tovary]
             await con.copy_records_to_table(
-                "products", records=records, columns=COLS, schema_name=schema
+                "products", records=records, columns=copy_cols, schema_name=schema
             )
 
             await con.execute(f"create index on {schema}.products (artikul)")
