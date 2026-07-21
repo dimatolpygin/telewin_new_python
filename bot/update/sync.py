@@ -111,7 +111,7 @@ def _izmenilos(a: dict, b: dict, polya) -> bool:
     return False
 
 
-async def sync(path: str, apply_embed: bool = False) -> dict:
+async def sync(path: str, apply_embed: bool = False, monitor: bool = False) -> dict:
     cfg = load_config()
     schema = cfg.pg.schema
 
@@ -219,20 +219,28 @@ async def sync(path: str, apply_embed: bool = False) -> dict:
         from ..embed_index import main as embed_main
         await embed_main()
 
+    if monitor:
+        from . import monitor as _mon
+        pool2 = await create_pool(cfg)
+        try:
+            itog["novelty"] = await _mon.proverit(pool2, schema)
+        finally:
+            await pool2.close()
+
     return itog
 
 
 def _main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
-        logger.error("Укажи путь к .xls: python -m bot.update.sync <файл> [--apply-embed]")
+        logger.error("Укажи путь: python -m bot.update.sync <файл> [--apply-embed] [--monitor]")
         sys.exit(1)
     path = args[0]
     if not os.path.isfile(path):
         logger.error(f"Файл не найден: {path}")
         sys.exit(1)
-    apply_embed = "--apply-embed" in sys.argv
-    asyncio.run(sync(path, apply_embed=apply_embed))
+    asyncio.run(sync(path, apply_embed="--apply-embed" in sys.argv,
+                     monitor="--monitor" in sys.argv))
 
 
 if __name__ == "__main__":
