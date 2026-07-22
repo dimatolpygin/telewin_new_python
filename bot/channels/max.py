@@ -22,7 +22,7 @@ import httpx
 
 from ..config import Config
 from ..core import Yadro
-from ..keyboards import MAX_KOMANDY, max_nuzhna_svyaz
+from ..keyboards import CMD_SVYAZ, MAX_KOMANDY, max_klaviatura, max_nuzhna_svyaz
 from ..logger import (logger, nachat_zapros, log_vhodyashchee,
                       log_ishodyashchee, log_oshibka)
 from ..texts import WELCOME, RESET_OK, ERROR_RETRY, kontakt
@@ -56,8 +56,10 @@ class _MaxApi:
         self._headers = {"Authorization": token}
 
     async def get_updates(self, marker: int | None, timeout: int) -> dict:
+        # message_callback — нажатие inline-кнопки; без него в подписке апдейт
+        # просто не придёт и кнопка будет молчать
         params = {"timeout": timeout, "limit": 100,
-                  "types": "message_created,bot_started"}
+                  "types": "message_created,bot_started,message_callback"}
         if marker is not None:
             params["marker"] = marker
         r = await self._client.get(f"{BASE}/updates", headers=self._headers, params=params)
@@ -65,9 +67,23 @@ class _MaxApi:
         return r.json()
 
     async def send(self, chat_id: int, text: str) -> None:
+        # кнопка связи — на КАЖДОМ ответе (этап 35): постоянной клавиатуры под полем
+        # ввода в MAX нет, а меню команд клиент не показывает, поэтому inline при
+        # сообщении — единственный видимый способ дать её покупателю
         r = await self._client.post(
             f"{BASE}/messages", headers={**self._headers, "Content-Type": "application/json"},
-            params={"chat_id": chat_id}, json={"text": text},
+            params={"chat_id": chat_id},
+            json={"text": text, "attachments": max_klaviatura()},
+        )
+        r.raise_for_status()
+
+    async def otvetit_na_callback(self, callback_id: str) -> None:
+        """Подтвердить нажатие inline-кнопки (снимает индикатор загрузки у клиента).
+        Тело БЕЗ `message`: тело с ним переписало бы исходное сообщение, а телефон
+        должен уйти отдельной репликой."""
+        r = await self._client.post(
+            f"{BASE}/answers", headers={**self._headers, "Content-Type": "application/json"},
+            params={"callback_id": callback_id}, json={},
         )
         r.raise_for_status()
 
@@ -94,6 +110,13 @@ def _razobrat(u: dict) -> tuple[int | None, str, object, str]:
         return chat_id, text, from_id, typ
     if typ == "bot_started":
         return u.get("chat_id"), "", (u.get("user") or {}).get("user_id"), typ
+    if typ == "message_callback":
+        # нажатие inline-кнопки: чат берём из сообщения, при котором висела кнопка,
+        # «текстом» отдаём payload кнопки
+        cb = u.get("callback", {})
+        rec = (u.get("message") or {}).get("recipient", {})
+        chat_id = rec.get("chat_id") or rec.get("user_id") or u.get("chat_id")
+        return chat_id, (cb.get("payload") or ""), (cb.get("user") or {}).get("user_id"), typ
     return None, "", None, typ or "?"
 
 
@@ -105,6 +128,19 @@ async def _handle(u: dict, api: _MaxApi, yadro: Yadro, phone: str) -> None:
     with nachat_zapros(CHANNEL):
         log_vhodyashchee(None, from_id, None, text or f"({typ})")
         try:
+            if typ == "message_callback":
+                # подтверждение — best-effort: даже если MAX его не примет,
+                # покупатель должен получить телефон
+                cb_id = (u.get("callback") or {}).get("callback_id")
+                if cb_id:
+                    try:
+                        await api.otvetit_na_callback(cb_id)
+                    except Exception:
+                        logger.warning(f"[{CHANNEL}] не удалось подтвердить callback")
+                if text == CMD_SVYAZ:
+                    await api.send(chat_id, kontakt(phone))
+                    log_ishodyashchee(str(from_id), "телефон магазина (кнопка связи)")
+                return
             if typ == "bot_started":
                 await api.send(chat_id, WELCOME)
                 log_ishodyashchee(str(from_id), "приветствие")
