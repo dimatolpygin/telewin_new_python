@@ -17,9 +17,10 @@ import httpx
 
 from ..config import Config
 from ..core import Yadro
+from ..keyboards import vk_klaviatura, vk_nazhata_svyaz
 from ..logger import (logger, nachat_zapros, log_vhodyashchee,
                       log_ishodyashchee, log_oshibka)
-from ..texts import WELCOME, RESET_OK, ERROR_RETRY
+from ..texts import WELCOME, RESET_OK, ERROR_RETRY, kontakt
 
 CHANNEL = "vk"
 API = "https://api.vk.com/method"
@@ -45,9 +46,12 @@ class _VkApi:
         return data["response"]
 
     async def send(self, peer_id: int, text: str) -> None:
-        # random_id != 0 — VK так дедуплицирует отправку
+        # random_id != 0 — VK так дедуплицирует отправку.
+        # keyboard шлём с КАЖДЫМ сообщением (этап 35): постоянная клавиатура живёт
+        # до следующей отправки, поэтому сообщение без неё её бы и убрало.
         await self.call("messages.send", peer_id=peer_id, message=text,
-                        random_id=random.randint(1, 2_000_000_000))
+                        random_id=random.randint(1, 2_000_000_000),
+                        keyboard=vk_klaviatura())
 
 
 async def _get_server(api: _VkApi, group_id: str) -> tuple[str, str, str]:
@@ -69,7 +73,7 @@ def _payload_start(msg: dict) -> bool:
         return False
 
 
-async def _handle(msg: dict, api: _VkApi, yadro: Yadro) -> None:
+async def _handle(msg: dict, api: _VkApi, yadro: Yadro, phone: str) -> None:
     """Обработать одно входящее сообщение VK (в своей задаче → свой request-id)."""
     peer_id = msg["peer_id"]
     from_id = msg.get("from_id")
@@ -78,6 +82,11 @@ async def _handle(msg: dict, api: _VkApi, yadro: Yadro) -> None:
         log_vhodyashchee(None, from_id, None, text or "(без текста)")
         try:
             low = text.lower()
+            # кнопка связи (этап 35): отвечаем телефоном, ИИ и поиск не трогаем
+            if vk_nazhata_svyaz(text, msg.get("payload")):
+                await api.send(peer_id, kontakt(phone))
+                log_ishodyashchee(str(from_id), "телефон магазина (кнопка связи)")
+                return
             if low in _WELCOME_CMD or _payload_start(msg):
                 await api.send(peer_id, WELCOME)
                 log_ishodyashchee(str(from_id), "приветствие")
@@ -137,7 +146,7 @@ async def run_vk(cfg: Config, yadro: Yadro) -> None:
                 msg = obj.get("message", obj)  # v5.100+ кладёт в object.message
                 # каждое сообщение — своя задача (свой request-id); очередь на
                 # (канал, peer) держит ядро, поэтому один собеседник не гоняется
-                asyncio.create_task(_handle(msg, api, yadro))
+                asyncio.create_task(_handle(msg, api, yadro, cfg.shop_phone))
 
 
 async def _standalone() -> None:

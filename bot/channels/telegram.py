@@ -11,9 +11,10 @@ from aiogram.types import Message
 
 from ..config import Config
 from ..core import Yadro
+from ..keyboards import tg_klaviatura, vk_nazhata_svyaz
 from ..logger import (logger, nachat_zapros, log_vhodyashchee,
                       log_ishodyashchee, log_oshibka)
-from ..texts import WELCOME, RESET_OK, ERROR_RETRY
+from ..texts import WELCOME, RESET_OK, ERROR_RETRY, kontakt
 
 CHANNEL = "telegram"
 
@@ -38,13 +39,20 @@ async def run_telegram(cfg: Config, yadro: Yadro) -> None:
 
     async def _route(message: Message) -> None:
         text = message.text or ""
+        # кнопка связи (этап 35): в TG нажатие приходит обычным текстом с подписью
+        # кнопки, поэтому ловим по тексту; поиск и ИИ не трогаем
+        if vk_nazhata_svyaz(text, None):
+            await message.answer(kontakt(cfg.shop_phone), reply_markup=tg_klaviatura())
+            log_ishodyashchee(message.from_user.username if message.from_user else None,
+                              "телефон магазина (кнопка связи)")
+            return
         if text.startswith("/start"):
-            await message.answer(WELCOME)
+            await message.answer(WELCOME, reply_markup=tg_klaviatura())
             log_ishodyashchee(message.from_user.username if message.from_user else None, "приветствие")
             return
         if text.startswith("/reset"):
             await yadro.sbros(CHANNEL, message.chat.id)
-            await message.answer(RESET_OK)
+            await message.answer(RESET_OK, reply_markup=tg_klaviatura())
             return
         if not text or text.startswith("/"):
             return
@@ -59,7 +67,7 @@ async def run_telegram(cfg: Config, yadro: Yadro) -> None:
 
             t0 = time.time()
             res = await yadro.obrabotat(CHANNEL, chat_id, user_text, typing_cb=typing)
-            await message.answer(res.answer)
+            await message.answer(res.answer, reply_markup=tg_klaviatura())
             ms = int((time.time() - t0) * 1000)
             log_ishodyashchee(uname, res.answer, ms=ms,
                               meta=f"[поиск: {res.zaprosy_poiska}, найдено: {res.naydeno}]")

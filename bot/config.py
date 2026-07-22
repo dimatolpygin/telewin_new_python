@@ -55,6 +55,9 @@ class Config:
     vk_token: str
     vk_group_id: str
     max_token: str
+    # Телефон магазина для кнопки связи (этап 35). Пусто → кнопка отвечает,
+    # что телефон недоступен; в коде номер не хардкодится.
+    shop_phone: str
 
 
 def load_config() -> Config:
@@ -80,6 +83,7 @@ def load_config() -> Config:
         vk_token=os.environ.get("VK_TOKEN", "").strip(),
         vk_group_id=os.environ.get("VK_GROUP_ID", "").strip(),
         max_token=os.environ.get("MAX_TOKEN", "").strip(),
+        shop_phone=os.environ.get("SHOP_PHONE", "").strip(),
     )
 
 
