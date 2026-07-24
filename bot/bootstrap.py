@@ -20,6 +20,11 @@ async def sozdat_yadro(cfg: Config) -> tuple[Yadro, object, Sessions]:
     from .search.gibrid import Gibrid
 
     pool = await create_pool(cfg)
+
+    # Таблица журнала диалогов для отчёта владельцу (этап 38) — best-effort.
+    from .dialog_log import obespechit_tablicu
+    await obespechit_tablicu(pool, cfg.pg.schema)
+
     tovary = await zagruzit_vse_tovary(pool, cfg.pg.schema)
     poisk = Poisk(tovary)
     logger.info(f"Поиск готов: {poisk.размер_базы} товаров в базе")

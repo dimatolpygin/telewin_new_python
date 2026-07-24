@@ -58,6 +58,9 @@ class Config:
     # Телефон магазина для кнопки связи (этап 35). Пусто → кнопка отвечает,
     # что телефон недоступен; в коде номер не хардкодится.
     shop_phone: str
+    # Кодовое слово выгрузки Excel-отчёта по диалогам (этап 38). Владелец пишет
+    # его боту в Telegram → получает .xlsx. Секрет-гейт; меняется одной строкой.
+    stats_code: str
 
 
 def load_config() -> Config:
@@ -84,6 +87,7 @@ def load_config() -> Config:
         vk_group_id=os.environ.get("VK_GROUP_ID", "").strip(),
         max_token=os.environ.get("MAX_TOKEN", "").strip(),
         shop_phone=os.environ.get("SHOP_PHONE", "").strip(),
+        stats_code=os.environ.get("STATS_CODE", "/otchet63627").strip(),
     )
 
 

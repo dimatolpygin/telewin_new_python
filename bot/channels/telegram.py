@@ -46,6 +46,11 @@ async def run_telegram(cfg: Config, yadro: Yadro) -> None:
             log_ishodyashchee(message.from_user.username if message.from_user else None,
                               "телефон магазина (кнопка связи)")
             return
+        # кодовое слово выгрузки Excel-отчёта (этап 38) — секрет-гейт из .env;
+        # ловим ДО /start и обычной обработки, чтобы не ушло в поиск
+        if cfg.stats_code and text.strip() == cfg.stats_code:
+            await _otchet(message)
+            return
         if text.startswith("/start"):
             await message.answer(WELCOME, reply_markup=tg_klaviatura())
             log_ishodyashchee(message.from_user.username if message.from_user else None, "приветствие")
@@ -58,15 +63,33 @@ async def run_telegram(cfg: Config, yadro: Yadro) -> None:
             return
         await _obrabotat(message, text)
 
+    async def _otchet(message: Message) -> None:
+        """Собрать .xlsx-отчёт по диалогам и прислать документом (этап 38)."""
+        from aiogram.types import BufferedInputFile
+        from ..dialog_log import postroit_otchet_xlsx
+        uname = message.from_user.username if message.from_user else None
+        try:
+            data = await postroit_otchet_xlsx(yadro.pool, cfg.pg.schema)
+            imya_fajla = "Отчёт_диалоги.xlsx"
+            await message.answer_document(BufferedInputFile(data, imya_fajla),
+                                          caption="Отчёт по диалогам бота.")
+            log_ishodyashchee(uname, f"отчёт по диалогам ({len(data)} Б)")
+        except Exception:
+            log_oshibka("Не удалось собрать отчёт по диалогам")
+            await message.answer("Не получилось собрать отчёт — данные ещё копятся "
+                                 "или база недоступна. Попробуйте позже.")
+
     async def _obrabotat(message: Message, user_text: str) -> None:
         chat_id = message.chat.id
-        uname = message.from_user.username if message.from_user else None
+        u = message.from_user
+        uname = u.username if u else None
         try:
             async def typing() -> None:
                 await bot.send_chat_action(chat_id, "typing")
 
             t0 = time.time()
-            res = await yadro.obrabotat(CHANNEL, chat_id, user_text, typing_cb=typing)
+            res = await yadro.obrabotat(CHANNEL, chat_id, user_text, typing_cb=typing,
+                                        imya=(u.first_name if u else None), nik=uname)
             await message.answer(res.answer, reply_markup=tg_klaviatura())
             ms = int((time.time() - t0) * 1000)
             log_ishodyashchee(uname, res.answer, ms=ms,

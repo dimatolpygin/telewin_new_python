@@ -37,14 +37,22 @@ class Yadro:
         # обращении. str(chat_key) — id каналов разного типа приводим к строке.
         self._zamki: dict[tuple[str, str], asyncio.Lock] = collections.defaultdict(asyncio.Lock)
 
+    @property
+    def pool(self):
+        """Пул БД (для выгрузки отчёта по диалогам, этап 38). Может быть None."""
+        return self._pool
+
     async def obrabotat(
         self, channel: str, chat_key, user_text: str, *,
         typing_cb: Optional[Callable[[], Awaitable[None]]] = None,
+        imya: Optional[str] = None, nik: Optional[str] = None,
     ) -> AgentResult:
         """Обработать запрос пользователя канала `channel`, чат `chat_key`.
 
         `typing_cb` — необязательный колбэк «показать, что бот печатает» (в TG это
         send_chat_action). Вызывается под замком, перед долгой работой агента.
+        `imya`/`nik` — что канал знает о собеседнике; идут только в журнал диалогов
+        (этап 38), на поиск/ответ не влияют.
         Возвращает `AgentResult` (ответ + метаданные поиска для логов адаптера).
         """
         kluch = (channel, str(chat_key))
@@ -58,7 +66,18 @@ class Yadro:
                 gibrid=self._gibrid, data_prajsa=data_prajsa,
             )
             await self._sessions.sohranit(channel, chat_key, res.new_history)
-            return res
+        # журнал — ПОСЛЕ снятия замка (не держим очередь на записи отчётной таблицы);
+        # best-effort внутри zapisat, ошибки не всплывают
+        await self._zhurnal(channel, chat_key, user_text, res, imya, nik)
+        return res
+
+    async def _zhurnal(self, channel, chat_key, user_text, res, imya, nik) -> None:
+        """Best-effort запись хода диалога в таблицу отчёта (этап 38)."""
+        from .dialog_log import zapisat
+        naydeno = res.naydeno if res.zaprosy_poiska else -1  # -1 = бот не искал за ход
+        await zapisat(self._pool, self._cfg.pg.schema, channel, chat_key,
+                      user_text, res.answer, imya=imya, nik=nik,
+                      iskal=res.zaprosy_poiska, naydeno=naydeno)
 
     async def sbros(self, channel: str, chat_key) -> None:
         """Сброс истории диалога (команда /reset и её эквиваленты в каналах)."""
