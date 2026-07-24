@@ -61,6 +61,12 @@ class Config:
     # Кодовое слово выгрузки Excel-отчёта по диалогам (этап 38). Владелец пишет
     # его боту в Telegram → получает .xlsx. Секрет-гейт; меняется одной строкой.
     stats_code: str
+    # Реальные адреса точек и часы работы (этап 36-Б). Пусто → бот НЕ выдумывает,
+    # говорит «подскажут в магазине» (поведение 36-А). В коде улицы не хардкодим:
+    # точка Микрорайон = столбец остатка `ostatok_mikro`, Берёзовская = `ostatok_berez`.
+    shop_addr_mikro: str
+    shop_addr_berez: str
+    shop_hours: str
 
 
 def load_config() -> Config:
@@ -88,6 +94,9 @@ def load_config() -> Config:
         max_token=os.environ.get("MAX_TOKEN", "").strip(),
         shop_phone=os.environ.get("SHOP_PHONE", "").strip(),
         stats_code=os.environ.get("STATS_CODE", "/otchet63627").strip(),
+        shop_addr_mikro=os.environ.get("SHOP_ADDR_MIKRO", "").strip(),
+        shop_addr_berez=os.environ.get("SHOP_ADDR_BEREZ", "").strip(),
+        shop_hours=os.environ.get("SHOP_HOURS", "").strip(),
     )
 
 

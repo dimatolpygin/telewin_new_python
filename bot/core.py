@@ -36,6 +36,9 @@ class Yadro:
         # Замки на (канал, chat_key). defaultdict — ключ создаётся лениво при первом
         # обращении. str(chat_key) — id каналов разного типа приводим к строке.
         self._zamki: dict[tuple[str, str], asyncio.Lock] = collections.defaultdict(asyncio.Lock)
+        # Блок про адреса/часы точек (этап 36-Б) — статичен, собираем один раз из .env.
+        from .ai.agent import sobrat_tochki
+        self._tochki = sobrat_tochki(cfg.shop_addr_mikro, cfg.shop_addr_berez, cfg.shop_hours)
 
     @property
     def pool(self):
@@ -63,7 +66,7 @@ class Yadro:
             data_prajsa = await self._data_prajsa()
             res = await run_agent(
                 self._cfg.openrouter, self._poisk, history, user_text,
-                gibrid=self._gibrid, data_prajsa=data_prajsa,
+                gibrid=self._gibrid, data_prajsa=data_prajsa, tochki=self._tochki,
             )
             await self._sessions.sohranit(channel, chat_key, res.new_history)
         # журнал — ПОСЛЕ снятия замка (не держим очередь на записи отчётной таблицы);
