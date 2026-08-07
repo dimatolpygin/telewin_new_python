@@ -102,6 +102,14 @@ class Poisk:
         rodo = json.load(open(os.path.join(data_dir, "rodovye.json"), encoding="utf-8"))
         self.rodovye = {k: v for k, v in rodo.items() if not k.startswith("_")}
 
+        # справочник расшифровок кодов саморезов (этап 40): код -> {расшифровка, головка,
+        # наконечник, применение}. Отдаётся агенту в tool-payload, чтобы бот описывал
+        # характеристики ИЗ ДАННЫХ, а не выдумывал (баг: ШСГД «с пресс-шайбой»).
+        kody = json.load(open(os.path.join(data_dir, "kody_samorezov.json"), encoding="utf-8"))
+        self.kody_samorezov = {k: v for k, v in kody.items() if not k.startswith("_")}
+        # коды сортируем по длине (длинные вперёд): «ШС КРОВ» матчим раньше «ШС ГВЛ»/«ШСГД».
+        self._kody_sorted = sorted(self.kody_samorezov, key=len, reverse=True)
+
         # индекс канала производителя: производитель -> его стемы и его строки.
         # Страны/заглушки («Россия»/«Китай»/«Без бренда»/«ноль») исключаем из стем-индекса —
         # иначе «россия» уводит канал производителя в 4411 товаров (баг этапа 15).
@@ -145,6 +153,18 @@ class Poisk:
     @property
     def размер_базы(self) -> int:
         return len(self.rows)
+
+    def harakteristiki_koda(self, imya: str) -> dict | None:
+        """Расшифровка кода самореза по имени позиции (этап 40). Матч по префиксу имени
+        (верхний регистр, пробелы схлопнуты), длинные коды раньше коротких. Нет кода — None."""
+        if not imya:
+            return None
+        import re as _re
+        nm = _re.sub(r"\s+", " ", imya.strip().upper())
+        for kod in self._kody_sorted:
+            if nm.startswith(kod):
+                return self.kody_samorezov[kod]
+        return None
 
     def atributy_zaprosa(self, q: str) -> dict:
         a = razobrat(q)
