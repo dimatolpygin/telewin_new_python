@@ -75,7 +75,7 @@ def load_config() -> Config:
         bot_token=must("BOT_TOKEN"),
         openrouter=OpenRouterConfig(
             api_key=must("OPENROUTER_API_KEY"),
-            model=os.environ.get("OPENROUTER_MODEL", "anthropic/claude-haiku-4.5"),
+            model=os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash"),
             base_url="https://openrouter.ai/api/v1",
         ),
         pg=PgConfig(
