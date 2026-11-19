@@ -10,6 +10,8 @@ __pycache__/
 logs/
 # транзиентный лок планировщика (этап 24)
 .update.lock.d/
+.update.lock
+/scripts/update_docker.live.sh
 
 # крупные данные (генерируются export_price.py)
 data/products.json

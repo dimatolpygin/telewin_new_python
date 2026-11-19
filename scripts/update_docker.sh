@@ -22,7 +22,7 @@ cd "$ROOT"
 LOG_DIR="${TELEWIN_LOG_DIR:-$ROOT/logs}"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/update.cron.log"
-LOCK="${TELEWIN_LOCK:-$ROOT/.update.lock.d}"
+LOCK="${TELEWIN_LOCK:-$ROOT/.update.lock}"
 
 # docker | docker-compose — что доступно
 if docker compose version >/dev/null 2>&1; then
@@ -33,12 +33,22 @@ fi
 
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 
-# Лок: атомарный mkdir — второй параллельный поллинг сразу выходит (долгий re-embed не наслаивается).
-if ! mkdir "$LOCK" 2>/dev/null; then
-  log "уже выполняется (lock $LOCK) — выход"
-  exit 0
-fi
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+# flock освобождает блокировку при закрытии дескриптора, даже при аварийном завершении.
+# Сам файл остаётся на месте: удаление создало бы отдельный лок для следующего запуска.
+exec 9>>"$LOCK" || { log "не удалось открыть файл блокировки $LOCK"; exit 1; }
+flock -n -E 75 9
+LOCK_CODE=$?
+case "$LOCK_CODE" in
+  0) ;;
+  75)
+    log "обновление уже выполняется (lock $LOCK) — выход"
+    exit 0
+    ;;
+  *)
+    log "не удалось взять блокировку $LOCK (код $LOCK_CODE)"
+    exit "$LOCK_CODE"
+    ;;
+esac
 
 log "=== поллинг прайса ==="
 $DC run --rm updater >> "$LOG" 2>&1
